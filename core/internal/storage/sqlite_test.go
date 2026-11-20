@@ -77,6 +77,8 @@ func TestSaveSnapshotPersistsWideRow(t *testing.T) {
 	snapshot := model.Snapshot{
 		CollectedAt: now, LastCollectedAt: now, PostmasterStart: now.Add(-time.Hour),
 		Connected: true, SessionsTotal: 3, Commits: 7, MaxConnections: 100,
+		MaxReplayLagBytes: 512, MaxReplayLagBytesAvailable: true,
+		MaxReplayLagSeconds: 0.25, MaxReplayLagSecondsAvailable: true,
 	}
 	if err := store.SaveSnapshot(ctx, "instance_test", snapshot); err != nil {
 		t.Fatal(err)
@@ -87,6 +89,16 @@ func TestSaveSnapshotPersistsWideRow(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one persisted snapshot, got %d", count)
+	}
+	loaded, err := store.LatestSnapshot(ctx, "instance_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.MaxReplayLagSecondsAvailable || loaded.MaxReplayLagSeconds != 0.25 {
+		t.Fatalf("replication lag availability was not persisted: %#v", loaded)
+	}
+	if !loaded.MaxReplayLagBytesAvailable || loaded.MaxReplayLagBytes != 512 {
+		t.Fatalf("replication byte lag availability was not persisted: %#v", loaded)
 	}
 }
 

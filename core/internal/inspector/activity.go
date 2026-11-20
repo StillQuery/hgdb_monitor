@@ -41,11 +41,13 @@ type Activity struct {
 type LockWait struct {
 	BlockedPID       int32   `json:"blockedPid"`
 	BlockingPID      int32   `json:"blockingPid"`
+	BlockerType      string  `json:"blockerType"`
+	BlockerIdentity  string  `json:"-"`
 	LockType         string  `json:"lockType,omitempty"`
 	RequestedMode    string  `json:"requestedMode,omitempty"`
 	SchemaName       string  `json:"schemaName,omitempty"`
 	RelationName     string  `json:"relationName,omitempty"`
-	WaitSeconds      float64 `json:"waitSeconds"`
+	QueryAgeSeconds  float64 `json:"queryAgeSeconds"`
 	BlockedSQL       string  `json:"blockedSql"`
 	BlockingSQL      string  `json:"blockingSql"`
 	BlockedDatabase  string  `json:"blockedDatabase,omitempty"`
@@ -142,11 +144,61 @@ const activityQueryPrefix = `
 		       CASE WHEN xact_start IS NULL THEN 0 ELSE extract(epoch FROM clock_timestamp() - xact_start) END,
 		       coalesce(query, ''), backend_start, xact_start, query_start
 		FROM pg_catalog.pg_stat_activity
-		WHERE pid <> pg_backend_pid() AND `
+		WHERE backend_type = 'client backend' AND pid <> pg_backend_pid() AND `
 
 const activityQuerySuffix = `
 		ORDER BY CASE WHEN $3::text = 'long_transaction' THEN xact_start WHEN $3::text = 'idle_in_transaction' THEN state_change ELSE query_start END ASC NULLS LAST
 		LIMIT $1`
+
+const lockWaitQuery = `
+	SELECT blocked.pid, coalesce(blocker.pid, blockers.blocker_pid),
+	       CASE WHEN blockers.blocker_pid = 0 THEN 'prepared_transaction' ELSE 'session' END,
+	       coalesce(waiting_lock.blocker_identity, blockers.blocker_pid::text),
+	       coalesce(waiting_lock.locktype, ''), coalesce(waiting_lock.mode, ''),
+	       coalesce(namespace.nspname, ''), coalesce(relation.relname, ''),
+	       extract(epoch FROM clock_timestamp() - coalesce(blocked.query_start, clock_timestamp())),
+	       coalesce(blocked.query, ''), coalesce(blocker.query, ''),
+	       coalesce(blocked.datname,''), coalesce(blocked.usename,''), coalesce(blocker.datname,''), coalesce(blocker.usename,'')
+	FROM pg_catalog.pg_stat_activity blocked
+	CROSS JOIN LATERAL (
+		SELECT DISTINCT blocker_pid
+		FROM unnest(pg_catalog.pg_blocking_pids(blocked.pid)) AS blocking_pid(blocker_pid)
+	) blockers
+	LEFT JOIN pg_catalog.pg_stat_activity blocker ON blocker.pid = blockers.blocker_pid
+	LEFT JOIN LATERAL (
+		SELECT waiting.locktype, waiting.mode, waiting.database, waiting.relation,
+		       CASE WHEN blockers.blocker_pid = 0
+		         THEN concat_ws(':', 'prepared', waiting.locktype, waiting.database, waiting.relation,
+		                        waiting.page, waiting.tuple, waiting.virtualxid, waiting.transactionid,
+		                        waiting.classid, waiting.objid, waiting.objsubid)
+		         ELSE coalesce(holding.virtualtransaction, holding.transactionid::text,
+		                concat_ws(':', holding.locktype, holding.database, holding.relation,
+		                          holding.page, holding.tuple, holding.classid, holding.objid, holding.objsubid))
+		       END AS blocker_identity
+		FROM pg_catalog.pg_locks waiting
+		JOIN pg_catalog.pg_locks holding
+		  ON ((blockers.blocker_pid = 0 AND holding.pid IS NULL) OR holding.pid = blockers.blocker_pid)
+		 AND holding.locktype = waiting.locktype
+		 AND holding.database IS NOT DISTINCT FROM waiting.database
+		 AND holding.relation IS NOT DISTINCT FROM waiting.relation
+		 AND holding.page IS NOT DISTINCT FROM waiting.page
+		 AND holding.tuple IS NOT DISTINCT FROM waiting.tuple
+		 AND holding.virtualxid IS NOT DISTINCT FROM waiting.virtualxid
+		 AND holding.transactionid IS NOT DISTINCT FROM waiting.transactionid
+		 AND holding.classid IS NOT DISTINCT FROM waiting.classid
+		 AND holding.objid IS NOT DISTINCT FROM waiting.objid
+		 AND holding.objsubid IS NOT DISTINCT FROM waiting.objsubid
+		WHERE waiting.pid = blocked.pid AND NOT waiting.granted
+		ORDER BY waiting.locktype, waiting.mode
+		LIMIT 1
+	) waiting_lock ON true
+	LEFT JOIN pg_catalog.pg_class relation
+	  ON relation.oid = waiting_lock.relation
+	 AND waiting_lock.database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+	LEFT JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+	WHERE blocked.backend_type = 'client backend'
+	ORDER BY blocked.query_start NULLS LAST
+	LIMIT $1`
 
 func LockWaits(ctx context.Context, config datasource.TestConfig, limit int) ([]LockWait, error) {
 	if limit <= 0 || limit > 50 {
@@ -159,27 +211,7 @@ func LockWaits(ctx context.Context, config datasource.TestConfig, limit int) ([]
 	defer func() { _ = conn.Close(context.Background()) }()
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	rows, err := conn.Query(queryCtx, `
-		SELECT blocked.pid, blocker.pid,
-		       coalesce(waiting_lock.locktype, ''), coalesce(waiting_lock.mode, ''),
-		       coalesce(namespace.nspname, ''), coalesce(relation.relname, ''),
-		       extract(epoch FROM clock_timestamp() - coalesce(blocked.state_change, blocked.query_start, clock_timestamp())),
-		       coalesce(blocked.query, ''), coalesce(blocker.query, ''),
-		       coalesce(blocked.datname,''), coalesce(blocked.usename,''), coalesce(blocker.datname,''), coalesce(blocker.usename,'')
-		FROM pg_catalog.pg_stat_activity blocked
-		CROSS JOIN LATERAL unnest(pg_catalog.pg_blocking_pids(blocked.pid)) AS blockers(blocker_pid)
-		JOIN pg_catalog.pg_stat_activity blocker ON blocker.pid = blockers.blocker_pid
-		LEFT JOIN LATERAL (
-			SELECT locktype, mode, relation
-			FROM pg_catalog.pg_locks
-			WHERE pid = blocked.pid AND NOT granted
-			ORDER BY locktype, mode
-			LIMIT 1
-		) waiting_lock ON true
-		LEFT JOIN pg_catalog.pg_class relation ON relation.oid = waiting_lock.relation
-		LEFT JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
-		ORDER BY blocked.query_start NULLS LAST
-		LIMIT $1`, limit)
+	rows, err := conn.Query(queryCtx, lockWaitQuery, limit)
 	if err != nil {
 		return nil, datasource.SanitizeProbeError(err)
 	}
@@ -188,8 +220,8 @@ func LockWaits(ctx context.Context, config datasource.TestConfig, limit int) ([]
 	for rows.Next() {
 		var item LockWait
 		var blockedSQL, blockingSQL string
-		if err := rows.Scan(&item.BlockedPID, &item.BlockingPID, &item.LockType, &item.RequestedMode,
-			&item.SchemaName, &item.RelationName, &item.WaitSeconds, &blockedSQL, &blockingSQL,
+		if err := rows.Scan(&item.BlockedPID, &item.BlockingPID, &item.BlockerType, &item.BlockerIdentity, &item.LockType, &item.RequestedMode,
+			&item.SchemaName, &item.RelationName, &item.QueryAgeSeconds, &blockedSQL, &blockingSQL,
 			&item.BlockedDatabase, &item.BlockedUser, &item.BlockingDatabase, &item.BlockingUser); err != nil {
 			return nil, datasource.SanitizeProbeError(err)
 		}

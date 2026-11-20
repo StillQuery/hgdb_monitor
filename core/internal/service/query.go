@@ -34,6 +34,7 @@ type MetricPoint struct {
 }
 type MetricSeries struct {
 	Points      []MetricPoint  `json:"points"`
+	RatePoints  []MetricPoint  `json:"ratePoints,omitempty"`
 	Summary     MetricSummary  `json:"summary"`
 	Previous    *MetricSummary `json:"previous,omitempty"`
 	ChangeRatio *float64       `json:"changeRatio,omitempty"`
@@ -52,15 +53,18 @@ type AIQueryMetricsResult struct {
 }
 
 type MetricSummary struct {
-	Kind          string  `json:"kind"`
-	Unit          string  `json:"unit"`
-	Start         float64 `json:"start"`
-	End           float64 `json:"end"`
-	Minimum       float64 `json:"minimum,omitempty"`
-	Maximum       float64 `json:"maximum,omitempty"`
-	Average       float64 `json:"average,omitempty"`
-	Increase      float64 `json:"increase,omitempty"`
-	RatePerSecond float64 `json:"ratePerSecond,omitempty"`
+	Kind            string  `json:"kind"`
+	Unit            string  `json:"unit"`
+	Start           float64 `json:"start"`
+	End             float64 `json:"end"`
+	Minimum         float64 `json:"minimum,omitempty"`
+	Maximum         float64 `json:"maximum,omitempty"`
+	Average         float64 `json:"average,omitempty"`
+	Increase        float64 `json:"increase,omitempty"`
+	RatePerSecond   float64 `json:"ratePerSecond,omitempty"`
+	ObservedSeconds float64 `json:"observedSeconds,omitempty"`
+	ResetDetected   bool    `json:"resetDetected,omitempty"`
+	SampleCount     int     `json:"sampleCount"`
 }
 
 type AIHistorySummary struct {
@@ -137,6 +141,7 @@ func (r *Runtime) Latest(ctx context.Context, id string) (model.Snapshot, error)
 		} else if !errors.Is(statusErr, storage.ErrStatusNotFound) {
 			return model.Snapshot{}, statusErr
 		}
+		r.applyCollectionFreshness(id, &snapshot)
 	}
 	return snapshot, err
 }
@@ -154,7 +159,7 @@ func (r *Runtime) ListAIInstances(ctx context.Context) ([]AIInstance, error) {
 		if snapshot, snapshotErr := r.repo.LatestSnapshot(ctx, source.ID); snapshotErr == nil {
 			if jobStatus.LastError != "" {
 				item.Status = "offline"
-			} else if time.Since(snapshot.CollectedAt) <= 2*StatusInterval {
+			} else if time.Since(snapshot.CollectedAt) <= 2*SampleInterval {
 				item.Status = "online"
 			}
 			if status, statusErr := r.repo.LatestInstanceStatus(ctx, source.ID); statusErr == nil {
@@ -244,6 +249,9 @@ func (r *Runtime) AIQueryMetrics(ctx context.Context, instanceRef string, select
 	}
 	for name, definition := range definitions {
 		series := MetricSeries{Summary: summarizeMetric(definition, current), Points: metricPoints(definition, current, 240)}
+		if definition.kind == "counter" {
+			series.RatePoints = metricRatePoints(definition, current, 240)
+		}
 		if len(current) > 240 {
 			result.Truncated = true
 		}
@@ -265,17 +273,47 @@ func (r *Runtime) AIQueryMetrics(ctx context.Context, instanceRef string, select
 }
 
 func metricPoints(definition metricDefinition, points []model.Snapshot, maximum int) []MetricPoint {
-	step := 1
-	if len(points) > maximum {
-		step = int(math.Ceil(float64(len(points)) / float64(maximum)))
+	available := make([]model.Snapshot, 0, len(points))
+	for _, point := range points {
+		if metricValueAvailable(definition, point) {
+			available = append(available, point)
+		}
 	}
-	result := make([]MetricPoint, 0, min(len(points), maximum))
-	for index, point := range points {
-		if index%step == 0 || index == len(points)-1 {
+	step := 1
+	if len(available) > maximum {
+		step = int(math.Ceil(float64(len(available)) / float64(maximum)))
+	}
+	result := make([]MetricPoint, 0, min(len(available), maximum))
+	for index, point := range available {
+		if index%step == 0 || index == len(available)-1 {
 			result = append(result, MetricPoint{At: point.CollectedAt, Value: definition.value(point)})
 		}
 	}
 	return result
+}
+
+func metricRatePoints(definition metricDefinition, points []model.Snapshot, maximum int) []MetricPoint {
+	result := make([]MetricPoint, 0, min(len(points), maximum))
+	for index := 1; index < len(points); index++ {
+		previous, current := points[index-1], points[index]
+		seconds := current.CollectedAt.Sub(previous.CollectedAt).Seconds()
+		previousValue, currentValue := definition.value(previous), definition.value(current)
+		if seconds <= 0 || currentValue < previousValue || counterBoundaryChanged(previous, current) {
+			continue
+		}
+		result = append(result, MetricPoint{At: current.CollectedAt, Value: (currentValue - previousValue) / seconds})
+	}
+	if len(result) <= maximum {
+		return result
+	}
+	step := int(math.Ceil(float64(len(result)) / float64(maximum)))
+	downsampled := make([]MetricPoint, 0, maximum)
+	for index, point := range result {
+		if index%step == 0 || index == len(result)-1 {
+			downsampled = append(downsampled, point)
+		}
+	}
+	return downsampled
 }
 func comparisonValue(summary MetricSummary) float64 {
 	if summary.Kind == "counter" {
@@ -325,8 +363,16 @@ func (r *Runtime) AILatest(ctx context.Context, instanceRef string) (model.Snaps
 		} else if !errors.Is(statusErr, storage.ErrStatusNotFound) {
 			return model.Snapshot{}, statusErr
 		}
+		r.applyCollectionFreshness(source.ID, &snapshot)
 	}
 	return snapshot, err
+}
+
+func (r *Runtime) applyCollectionFreshness(id string, snapshot *model.Snapshot) {
+	jobStatus := r.scheduler.Status(id)
+	if jobStatus.LastError != "" || time.Since(snapshot.CollectedAt) > 2*SampleInterval {
+		snapshot.Connected = false
+	}
 }
 
 func validateHistoryRange(from, to time.Time) (time.Time, time.Time, error) {
@@ -386,31 +432,65 @@ func summarizeMetric(definition metricDefinition, points []model.Snapshot) Metri
 	if len(points) == 0 {
 		return result
 	}
-	result.Start = definition.value(points[0])
-	result.End = definition.value(points[len(points)-1])
 	if definition.kind == "counter" {
+		result.Start = definition.value(points[0])
+		result.End = definition.value(points[len(points)-1])
+		result.SampleCount = len(points)
 		for index := 1; index < len(points); index++ {
-			previous := definition.value(points[index-1])
-			current := definition.value(points[index])
-			if current >= previous {
-				result.Increase += current - previous
-			} else {
-				result.Increase += current
+			previousPoint, currentPoint := points[index-1], points[index]
+			previous := definition.value(previousPoint)
+			current := definition.value(currentPoint)
+			seconds := currentPoint.CollectedAt.Sub(previousPoint.CollectedAt).Seconds()
+			if seconds <= 0 {
+				continue
 			}
+			if current < previous || counterBoundaryChanged(previousPoint, currentPoint) {
+				result.ResetDetected = true
+				continue
+			}
+			result.Increase += current - previous
+			result.ObservedSeconds += seconds
 		}
-		seconds := points[len(points)-1].CollectedAt.Sub(points[0].CollectedAt).Seconds()
-		if seconds > 0 {
-			result.RatePerSecond = result.Increase / seconds
+		if result.ObservedSeconds > 0 {
+			result.RatePerSecond = result.Increase / result.ObservedSeconds
 		}
 		return result
 	}
 	result.Minimum, result.Maximum = math.Inf(1), math.Inf(-1)
 	for _, point := range points {
+		if !metricValueAvailable(definition, point) {
+			continue
+		}
 		value := definition.value(point)
+		if result.SampleCount == 0 {
+			result.Start = value
+		}
+		result.End = value
 		result.Average += value
 		result.Minimum = math.Min(result.Minimum, value)
 		result.Maximum = math.Max(result.Maximum, value)
+		result.SampleCount++
 	}
-	result.Average /= float64(len(points))
+	if result.SampleCount == 0 {
+		result.Minimum, result.Maximum = 0, 0
+		return result
+	}
+	result.Average /= float64(result.SampleCount)
 	return result
+}
+
+func metricValueAvailable(definition metricDefinition, snapshot model.Snapshot) bool {
+	if definition.kind == "gauge" {
+		switch definition.unit {
+		case "bytes":
+			return snapshot.MaxReplayLagBytesAvailable
+		case "seconds":
+			return snapshot.MaxReplayLagSecondsAvailable
+		}
+	}
+	return true
+}
+
+func counterBoundaryChanged(previous, current model.Snapshot) bool {
+	return !previous.PostmasterStart.IsZero() && !current.PostmasterStart.IsZero() && !previous.PostmasterStart.Equal(current.PostmasterStart)
 }

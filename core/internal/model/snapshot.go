@@ -32,9 +32,11 @@ type Snapshot struct {
 	CheckpointsTimed     int64 `json:"checkpointsTimed"`
 	CheckpointsRequested int64 `json:"checkpointsRequested"`
 
-	ReplicationConnections int64   `json:"replicationConnections"`
-	MaxReplayLagBytes      int64   `json:"maxReplayLagBytes"`
-	MaxReplayLagSeconds    float64 `json:"maxReplayLagSeconds"`
+	ReplicationConnections       int64   `json:"replicationConnections"`
+	MaxReplayLagBytes            int64   `json:"maxReplayLagBytes"`
+	MaxReplayLagBytesAvailable   bool    `json:"maxReplayLagBytesAvailable"`
+	MaxReplayLagSeconds          float64 `json:"maxReplayLagSeconds"`
+	MaxReplayLagSecondsAvailable bool    `json:"maxReplayLagSecondsAvailable"`
 
 	Connected       bool      `json:"connected"`
 	PostmasterStart time.Time `json:"postmasterStart"`

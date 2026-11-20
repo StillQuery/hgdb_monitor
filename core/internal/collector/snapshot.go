@@ -62,7 +62,9 @@ func CollectMetrics(ctx context.Context, config datasource.TestConfig) (Snapshot
 		&snapshot.WALBytes,
 		&snapshot.ReplicationConnections,
 		&snapshot.MaxReplayLagBytes,
+		&snapshot.MaxReplayLagBytesAvailable,
 		&snapshot.MaxReplayLagSeconds,
+		&snapshot.MaxReplayLagSecondsAvailable,
 	)
 	if err != nil {
 		return Snapshot{}, datasource.SanitizeProbeError(err)
@@ -124,6 +126,8 @@ WITH activity AS (
         AND xact_start <= clock_timestamp() - interval '300 seconds'
     )::bigint AS long_transactions
   FROM pg_catalog.pg_stat_activity
+  WHERE backend_type = 'client backend'
+    AND pid <> pg_backend_pid()
 ), database_stats AS (
   SELECT
     coalesce(sum(xact_commit), 0)::bigint AS commits,
@@ -141,14 +145,25 @@ WITH activity AS (
   WHERE NOT d.datistemplate
 ), lock_stats AS (
   SELECT
-    count(*) FILTER (WHERE NOT granted)::bigint AS locks_not_granted,
-    count(DISTINCT pid) FILTER (WHERE NOT granted)::bigint AS blocked_sessions
-  FROM pg_catalog.pg_locks
+    count(*) FILTER (WHERE NOT locks.granted)::bigint AS locks_not_granted,
+    count(DISTINCT locks.pid) FILTER (
+      WHERE NOT locks.granted AND activity.backend_type = 'client backend'
+    )::bigint AS blocked_sessions
+  FROM pg_catalog.pg_locks locks
+  LEFT JOIN pg_catalog.pg_stat_activity activity ON activity.pid = locks.pid
 ), replication_stats AS (
   SELECT
     count(*)::bigint AS replication_connections,
-    coalesce(max(CASE WHEN pg_catalog.pg_is_in_recovery() THEN 0 ELSE pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), replay_lsn) END), 0)::bigint AS max_replay_lag_bytes,
-    coalesce(max(extract(epoch FROM replay_lag)), 0)::double precision AS max_replay_lag_seconds
+    coalesce(max(greatest(pg_catalog.pg_wal_lsn_diff(
+      CASE WHEN pg_catalog.pg_is_in_recovery()
+        THEN coalesce(pg_catalog.pg_last_wal_receive_lsn(), pg_catalog.pg_last_wal_replay_lsn())
+        ELSE pg_catalog.pg_current_wal_lsn()
+      END,
+      replay_lsn
+    ), 0)) FILTER (WHERE replay_lsn IS NOT NULL), 0)::bigint AS max_replay_lag_bytes,
+    coalesce(bool_or(replay_lsn IS NOT NULL), false) AS max_replay_lag_bytes_available,
+    coalesce(max(extract(epoch FROM replay_lag)), 0)::double precision AS max_replay_lag_seconds,
+    coalesce(bool_or(replay_lag IS NOT NULL), false) AS max_replay_lag_seconds_available
   FROM pg_catalog.pg_stat_replication
 )
 SELECT
@@ -159,6 +174,7 @@ SELECT
   d.temp_files, d.temp_bytes, d.deadlocks,
   l.locks_not_granted, l.blocked_sessions,
   coalesce((SELECT wal_bytes FROM pg_catalog.pg_stat_wal), 0)::bigint,
-  r.replication_connections, r.max_replay_lag_bytes, r.max_replay_lag_seconds
+  r.replication_connections, r.max_replay_lag_bytes, r.max_replay_lag_bytes_available,
+  r.max_replay_lag_seconds, r.max_replay_lag_seconds_available
 FROM activity a CROSS JOIN database_stats d CROSS JOIN lock_stats l CROSS JOIN replication_stats r
 `

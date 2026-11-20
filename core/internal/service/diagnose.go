@@ -27,9 +27,11 @@ type AIDiagnoseBlockingFacts struct {
 }
 
 type AIDiagnoseReplicationFacts struct {
-	Connections   int64   `json:"connections"`
-	MaxLagBytes   int64   `json:"maxLagBytes"`
-	MaxLagSeconds float64 `json:"maxLagSeconds"`
+	Connections            int64   `json:"connections"`
+	MaxLagBytes            int64   `json:"maxLagBytes"`
+	MaxLagBytesAvailable   bool    `json:"maxLagBytesAvailable"`
+	MaxLagSeconds          float64 `json:"maxLagSeconds"`
+	MaxLagSecondsAvailable bool    `json:"maxLagSecondsAvailable"`
 }
 
 type AIDiagnoseCurrentFacts struct {
@@ -121,7 +123,7 @@ func (r *Runtime) AIDiagnoseDatabase(ctx context.Context, instanceRef, focus str
 			Connected: snapshot.Connected, Role: model.RoleFromRecovery(snapshot.InRecovery), Connections: connectionFacts,
 			Activity:    AIDiagnoseActivityFacts{QueriesOver60Seconds: snapshot.LongQueries, TransactionsOver300Seconds: snapshot.LongTransactions},
 			Blocking:    AIDiagnoseBlockingFacts{BlockedSessions: snapshot.BlockedSessions, UngrantedLocks: snapshot.LocksNotGranted},
-			Replication: AIDiagnoseReplicationFacts{Connections: snapshot.ReplicationConnections, MaxLagBytes: snapshot.MaxReplayLagBytes, MaxLagSeconds: snapshot.MaxReplayLagSeconds},
+			Replication: AIDiagnoseReplicationFacts{Connections: snapshot.ReplicationConnections, MaxLagBytes: snapshot.MaxReplayLagBytes, MaxLagBytesAvailable: snapshot.MaxReplayLagBytesAvailable, MaxLagSeconds: snapshot.MaxReplayLagSeconds, MaxLagSecondsAvailable: snapshot.MaxReplayLagSecondsAvailable},
 			Rates:       overview.Deltas,
 		},
 		Observations: diagnoseObservations(snapshot),

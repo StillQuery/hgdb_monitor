@@ -10,17 +10,18 @@ import (
 )
 
 type ReplicationConnection struct {
-	PID              int32   `json:"pid"`
-	ApplicationName  string  `json:"applicationName"`
-	ClientAddress    string  `json:"clientAddress,omitempty"`
-	State            string  `json:"state"`
-	SyncState        string  `json:"syncState"`
-	SentLSN          string  `json:"sentLsn,omitempty"`
-	WriteLSN         string  `json:"writeLsn,omitempty"`
-	FlushLSN         string  `json:"flushLsn,omitempty"`
-	ReplayLSN        string  `json:"replayLsn,omitempty"`
-	ReplayLagBytes   int64   `json:"replayLagBytes"`
-	ReplayLagSeconds float64 `json:"replayLagSeconds"`
+	PID                     int32    `json:"pid"`
+	ApplicationName         string   `json:"applicationName"`
+	ClientAddress           string   `json:"clientAddress,omitempty"`
+	State                   string   `json:"state"`
+	SyncState               string   `json:"syncState"`
+	SentLSN                 string   `json:"sentLsn,omitempty"`
+	WriteLSN                string   `json:"writeLsn,omitempty"`
+	FlushLSN                string   `json:"flushLsn,omitempty"`
+	ReplayLSN               string   `json:"replayLsn,omitempty"`
+	ReplayLagBytes          int64    `json:"replayLagBytes"`
+	ReplayLagBytesAvailable bool     `json:"replayLagBytesAvailable"`
+	ReplayLagSeconds        *float64 `json:"replayLagSeconds,omitempty"`
 }
 
 type ReplicationSlot struct {
@@ -33,13 +34,14 @@ type ReplicationSlot struct {
 }
 
 type ReplicationResult struct {
-	Role             string                  `json:"role"`
-	Connections      []ReplicationConnection `json:"connections"`
-	Slots            []ReplicationSlot       `json:"slots,omitempty"`
-	ReceiveLSN       string                  `json:"receiveLsn,omitempty"`
-	ReplayLSN        string                  `json:"replayLsn,omitempty"`
-	ReplayLagBytes   int64                   `json:"replayLagBytes"`
-	ReplayLagSeconds float64                 `json:"replayLagSeconds"`
+	Role                    string                  `json:"role"`
+	Connections             []ReplicationConnection `json:"connections"`
+	Slots                   []ReplicationSlot       `json:"slots,omitempty"`
+	ReceiveLSN              string                  `json:"receiveLsn,omitempty"`
+	ReplayLSN               string                  `json:"replayLsn,omitempty"`
+	ReplayLagBytes          int64                   `json:"replayLagBytes"`
+	ReplayLagBytesAvailable bool                    `json:"replayLagBytesAvailable"`
+	LastReplayAgeSeconds    *float64                `json:"lastReplayAgeSeconds,omitempty"`
 }
 
 func Replication(ctx context.Context, config datasource.TestConfig, includeSlots bool) (ReplicationResult, error) {
@@ -74,23 +76,26 @@ func Replication(ctx context.Context, config datasource.TestConfig, includeSlots
 			result.ReplayLSN = *replay
 		}
 		if receive != nil && replay != nil {
-			_ = tx.QueryRow(queryCtx, `SELECT coalesce(pg_catalog.pg_wal_lsn_diff($1::pg_lsn,$2::pg_lsn),0)::bigint`, *receive, *replay).Scan(&result.ReplayLagBytes)
+			if err := tx.QueryRow(queryCtx, `SELECT greatest(pg_catalog.pg_wal_lsn_diff($1::pg_lsn,$2::pg_lsn),0)::bigint`, *receive, *replay).Scan(&result.ReplayLagBytes); err != nil {
+				return ReplicationResult{}, datasource.SanitizeProbeError(err)
+			}
+			result.ReplayLagBytesAvailable = true
 		}
-		if lagSeconds != nil {
-			result.ReplayLagSeconds = *lagSeconds
-		}
+		result.LastReplayAgeSeconds = lagSeconds
 	} else {
 		rows, queryErr := tx.Query(queryCtx, `SELECT pid, coalesce(application_name,''), coalesce(client_addr::text,''), coalesce(state,''), coalesce(sync_state,''),
 			sent_lsn::text, write_lsn::text, flush_lsn::text, replay_lsn::text,
-			coalesce(pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), replay_lsn),0)::bigint,
-			coalesce(extract(epoch FROM replay_lag),0)::double precision FROM pg_catalog.pg_stat_replication ORDER BY pid`)
+			greatest(coalesce(pg_catalog.pg_wal_lsn_diff(pg_catalog.pg_current_wal_lsn(), replay_lsn),0),0)::bigint,
+			(replay_lsn IS NOT NULL),
+			extract(epoch FROM replay_lag)::double precision FROM pg_catalog.pg_stat_replication ORDER BY pid`)
 		if queryErr != nil {
 			return ReplicationResult{}, datasource.SanitizeProbeError(queryErr)
 		}
 		for rows.Next() {
 			var item ReplicationConnection
 			var sent, write, flush, replay *string
-			if err := rows.Scan(&item.PID, &item.ApplicationName, &item.ClientAddress, &item.State, &item.SyncState, &sent, &write, &flush, &replay, &item.ReplayLagBytes, &item.ReplayLagSeconds); err != nil {
+			var lagSeconds *float64
+			if err := rows.Scan(&item.PID, &item.ApplicationName, &item.ClientAddress, &item.State, &item.SyncState, &sent, &write, &flush, &replay, &item.ReplayLagBytes, &item.ReplayLagBytesAvailable, &lagSeconds); err != nil {
 				rows.Close()
 				return ReplicationResult{}, datasource.SanitizeProbeError(err)
 			}
@@ -106,6 +111,7 @@ func Replication(ctx context.Context, config datasource.TestConfig, includeSlots
 			if replay != nil {
 				item.ReplayLSN = *replay
 			}
+			item.ReplayLagSeconds = lagSeconds
 			result.Connections = append(result.Connections, item)
 		}
 		if err := rows.Err(); err != nil {
@@ -117,10 +123,10 @@ func Replication(ctx context.Context, config datasource.TestConfig, includeSlots
 	if includeSlots {
 		currentLSN := "pg_catalog.pg_current_wal_lsn()"
 		if standby {
-			currentLSN = "pg_catalog.pg_last_wal_receive_lsn()"
+			currentLSN = "coalesce(pg_catalog.pg_last_wal_receive_lsn(), pg_catalog.pg_last_wal_replay_lsn())"
 		}
 		rows, queryErr := tx.Query(queryCtx, `SELECT slot_name, slot_type, coalesce(plugin,''), coalesce(database::text,''), active,
-			coalesce(pg_catalog.pg_wal_lsn_diff(`+currentLSN+`, restart_lsn),0)::bigint FROM pg_catalog.pg_replication_slots ORDER BY slot_name`)
+			greatest(coalesce(pg_catalog.pg_wal_lsn_diff(`+currentLSN+`, restart_lsn),0),0)::bigint FROM pg_catalog.pg_replication_slots ORDER BY slot_name`)
 		if queryErr != nil {
 			return ReplicationResult{}, datasource.SanitizeProbeError(queryErr)
 		}

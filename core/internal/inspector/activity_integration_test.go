@@ -74,6 +74,9 @@ func TestLockWaitsIntegration(t *testing.T) {
 				if item.LockType != "advisory" || item.RequestedMode != "ExclusiveLock" {
 					t.Fatalf("unexpected lock metadata: %#v", item)
 				}
+				if item.BlockerType != "session" || item.QueryAgeSeconds <= 0 {
+					t.Fatalf("unexpected blocker semantics: %#v", item)
+				}
 				cancelWait()
 				return
 			}

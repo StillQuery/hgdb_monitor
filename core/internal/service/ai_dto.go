@@ -63,19 +63,21 @@ type AIActivitiesResult struct {
 }
 
 type AILockWaitItem struct {
-	BlockedSessionRef   string  `json:"blockedSessionRef"`
-	BlockingSessionRef  string  `json:"blockingSessionRef"`
-	BlockedDatabaseRef  string  `json:"blockedDatabaseRef,omitempty"`
-	BlockedUserRef      string  `json:"blockedUserRef,omitempty"`
-	BlockingDatabaseRef string  `json:"blockingDatabaseRef,omitempty"`
-	BlockingUserRef     string  `json:"blockingUserRef,omitempty"`
-	LockType            string  `json:"lockType,omitempty"`
-	RequestedMode       string  `json:"requestedMode,omitempty"`
-	SchemaName          string  `json:"schemaName,omitempty"`
-	RelationName        string  `json:"relationName,omitempty"`
-	WaitSeconds         float64 `json:"waitSeconds"`
-	BlockedSQL          string  `json:"blockedSql"`
-	BlockingSQL         string  `json:"blockingSql"`
+	BlockedSessionRef      string  `json:"blockedSessionRef"`
+	BlockingSessionRef     string  `json:"blockingSessionRef,omitempty"`
+	BlockingTransactionRef string  `json:"blockingTransactionRef,omitempty"`
+	BlockerType            string  `json:"blockerType"`
+	BlockedDatabaseRef     string  `json:"blockedDatabaseRef,omitempty"`
+	BlockedUserRef         string  `json:"blockedUserRef,omitempty"`
+	BlockingDatabaseRef    string  `json:"blockingDatabaseRef,omitempty"`
+	BlockingUserRef        string  `json:"blockingUserRef,omitempty"`
+	LockType               string  `json:"lockType,omitempty"`
+	RequestedMode          string  `json:"requestedMode,omitempty"`
+	SchemaName             string  `json:"schemaName,omitempty"`
+	RelationName           string  `json:"relationName,omitempty"`
+	QueryAgeSeconds        float64 `json:"queryAgeSeconds"`
+	BlockedSQL             string  `json:"blockedSql"`
+	BlockingSQL            string  `json:"blockingSql"`
 }
 
 type AILockWaitsResult struct {
@@ -106,15 +108,16 @@ type AITopSQLResult struct {
 }
 
 type AIReplicationConnection struct {
-	StandbyRef       string  `json:"standbyRef"`
-	State            string  `json:"state"`
-	SyncState        string  `json:"syncState"`
-	SentLSN          string  `json:"sentLsn,omitempty"`
-	WriteLSN         string  `json:"writeLsn,omitempty"`
-	FlushLSN         string  `json:"flushLsn,omitempty"`
-	ReplayLSN        string  `json:"replayLsn,omitempty"`
-	ReplayLagBytes   int64   `json:"replayLagBytes"`
-	ReplayLagSeconds float64 `json:"replayLagSeconds"`
+	StandbyRef              string   `json:"standbyRef"`
+	State                   string   `json:"state"`
+	SyncState               string   `json:"syncState"`
+	SentLSN                 string   `json:"sentLsn,omitempty"`
+	WriteLSN                string   `json:"writeLsn,omitempty"`
+	FlushLSN                string   `json:"flushLsn,omitempty"`
+	ReplayLSN               string   `json:"replayLsn,omitempty"`
+	ReplayLagBytes          int64    `json:"replayLagBytes"`
+	ReplayLagBytesAvailable bool     `json:"replayLagBytesAvailable"`
+	ReplayLagSeconds        *float64 `json:"replayLagSeconds,omitempty"`
 }
 
 type AIReplicationSlot struct {
@@ -125,13 +128,14 @@ type AIReplicationSlot struct {
 }
 type AIReplicationResult struct {
 	AICommon
-	Role             string                    `json:"role"`
-	Connections      []AIReplicationConnection `json:"connections"`
-	Slots            []AIReplicationSlot       `json:"slots,omitempty"`
-	ReceiveLSN       string                    `json:"receiveLsn,omitempty"`
-	ReplayLSN        string                    `json:"replayLsn,omitempty"`
-	ReplayLagBytes   int64                     `json:"replayLagBytes"`
-	ReplayLagSeconds float64                   `json:"replayLagSeconds"`
+	Role                    string                    `json:"role"`
+	Connections             []AIReplicationConnection `json:"connections"`
+	Slots                   []AIReplicationSlot       `json:"slots,omitempty"`
+	ReceiveLSN              string                    `json:"receiveLsn,omitempty"`
+	ReplayLSN               string                    `json:"replayLsn,omitempty"`
+	ReplayLagBytes          int64                     `json:"replayLagBytes"`
+	ReplayLagBytesAvailable bool                      `json:"replayLagBytesAvailable"`
+	LastReplayAgeSeconds    *float64                  `json:"lastReplayAgeSeconds,omitempty"`
 }
 
 type AIExplainResult struct {
@@ -185,6 +189,8 @@ func (r *Runtime) AIOverview(ctx context.Context, instanceRef string, includeDel
 			} else {
 				return AIOverviewResult{}, previousErr
 			}
+		} else if counterBoundaryChanged(previous, snapshot) || overviewCounterDecreased(previous, snapshot) {
+			result.Warnings = append(result.Warnings, "COUNTER_RESET_DETECTED")
 		} else if seconds := snapshot.CollectedAt.Sub(previous.CollectedAt).Seconds(); seconds > 0 && seconds <= 120 {
 			commits := counterIncrease(previous.Commits, snapshot.Commits)
 			rollbacks := counterIncrease(previous.Rollbacks, snapshot.Rollbacks)
@@ -219,6 +225,14 @@ func counterIncrease(previous, current int64) int64 {
 	return 0
 }
 
+func overviewCounterDecreased(previous, current model.Snapshot) bool {
+	return current.Commits < previous.Commits || current.Rollbacks < previous.Rollbacks ||
+		current.BlocksHit < previous.BlocksHit || current.BlocksRead < previous.BlocksRead ||
+		current.RowsInserted < previous.RowsInserted || current.RowsUpdated < previous.RowsUpdated || current.RowsDeleted < previous.RowsDeleted ||
+		current.TempBytes < previous.TempBytes || current.Deadlocks < previous.Deadlocks || current.WALBytes < previous.WALBytes ||
+		current.CheckpointsTimed < previous.CheckpointsTimed || current.CheckpointsRequested < previous.CheckpointsRequested
+}
+
 func (r *Runtime) AIActivitiesSafe(ctx context.Context, instanceRef string, kind inspector.ActivityKind, limit int) (AIActivitiesResult, error) {
 	return r.AIActivitiesSafeWithMinimum(ctx, instanceRef, kind, 0, limit)
 }
@@ -251,11 +265,19 @@ func (r *Runtime) AILockWaitsSafe(ctx context.Context, instanceRef string, limit
 	}
 	result := AILockWaitsResult{AICommon: common(instanceRef, "live", time.Now().UTC(), false), Items: make([]AILockWaitItem, 0, len(items))}
 	for _, item := range items {
+		blockingSessionRef := ""
+		blockingTransactionRef := ""
+		if item.BlockerType == "prepared_transaction" {
+			blockingTransactionRef = anonymousID(instanceRef, "prepared_transaction", item.BlockerIdentity)
+		} else {
+			blockingSessionRef = anonymousID(instanceRef, "session", fmt.Sprint(item.BlockingPID))
+		}
 		result.Items = append(result.Items, AILockWaitItem{
-			BlockedSessionRef: anonymousID(instanceRef, "session", fmt.Sprint(item.BlockedPID)), BlockingSessionRef: anonymousID(instanceRef, "session", fmt.Sprint(item.BlockingPID)),
+			BlockedSessionRef: anonymousID(instanceRef, "session", fmt.Sprint(item.BlockedPID)), BlockingSessionRef: blockingSessionRef,
+			BlockingTransactionRef: blockingTransactionRef, BlockerType: item.BlockerType,
 			BlockedDatabaseRef: anonymousID(instanceRef, "database", item.BlockedDatabase), BlockedUserRef: anonymousID(instanceRef, "user", item.BlockedUser),
 			BlockingDatabaseRef: anonymousID(instanceRef, "database", item.BlockingDatabase), BlockingUserRef: anonymousID(instanceRef, "user", item.BlockingUser),
-			LockType: item.LockType, RequestedMode: item.RequestedMode, SchemaName: item.SchemaName, RelationName: item.RelationName, WaitSeconds: item.WaitSeconds,
+			LockType: item.LockType, RequestedMode: item.RequestedMode, SchemaName: item.SchemaName, RelationName: item.RelationName, QueryAgeSeconds: item.QueryAgeSeconds,
 			BlockedSQL: privacy.RedactSQLLimit(item.BlockedSQL, 500), BlockingSQL: privacy.RedactSQLLimit(item.BlockingSQL, 500)})
 	}
 	return result, nil
@@ -328,9 +350,9 @@ func (r *Runtime) AIReplication(ctx context.Context, ref string, slots bool) (AI
 	if err != nil {
 		return AIReplicationResult{}, err
 	}
-	result := AIReplicationResult{AICommon: common(ref, "live", time.Now().UTC(), false), Role: raw.Role, ReceiveLSN: raw.ReceiveLSN, ReplayLSN: raw.ReplayLSN, ReplayLagBytes: raw.ReplayLagBytes, ReplayLagSeconds: raw.ReplayLagSeconds, Connections: []AIReplicationConnection{}}
+	result := AIReplicationResult{AICommon: common(ref, "live", time.Now().UTC(), false), Role: raw.Role, ReceiveLSN: raw.ReceiveLSN, ReplayLSN: raw.ReplayLSN, ReplayLagBytes: raw.ReplayLagBytes, ReplayLagBytesAvailable: raw.ReplayLagBytesAvailable, LastReplayAgeSeconds: raw.LastReplayAgeSeconds, Connections: []AIReplicationConnection{}}
 	for _, item := range raw.Connections {
-		result.Connections = append(result.Connections, AIReplicationConnection{StandbyRef: anonymousID(ref, "standby", fmt.Sprint(item.PID)), State: item.State, SyncState: item.SyncState, SentLSN: item.SentLSN, WriteLSN: item.WriteLSN, FlushLSN: item.FlushLSN, ReplayLSN: item.ReplayLSN, ReplayLagBytes: item.ReplayLagBytes, ReplayLagSeconds: item.ReplayLagSeconds})
+		result.Connections = append(result.Connections, AIReplicationConnection{StandbyRef: anonymousID(ref, "standby", fmt.Sprint(item.PID)), State: item.State, SyncState: item.SyncState, SentLSN: item.SentLSN, WriteLSN: item.WriteLSN, FlushLSN: item.FlushLSN, ReplayLSN: item.ReplayLSN, ReplayLagBytes: item.ReplayLagBytes, ReplayLagBytesAvailable: item.ReplayLagBytesAvailable, ReplayLagSeconds: item.ReplayLagSeconds})
 	}
 	for _, item := range raw.Slots {
 		result.Slots = append(result.Slots, AIReplicationSlot{SlotRef: anonymousID(ref, "slot", item.Name), SlotType: item.SlotType, Active: item.Active, RetainedBytes: item.RetainedBytes})

@@ -60,6 +60,7 @@ function bytes(value: number): string { return Intl.NumberFormat(undefined, { st
 function perSecond(value: number): string { return `${compact(value)}/s` }
 function bytesPerSecond(value: number): string { return `${bytes(value)}/s` }
 function perMinute(value: number): string { return `${compact(value)}/min` }
+function replayLatency(value: number | undefined): string { return value === undefined ? '—' : `${value.toFixed(2)}s` }
 function duration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 1) return '<1s'
   if (seconds < 60) return `${Math.round(seconds)}s`
@@ -275,7 +276,11 @@ function Overview({ t, sources, source, current, points, activities, lockWaits, 
   const utilization = current && current.maxConnections > 0 ? current.sessionsTotal * 100 / current.maxConnections : undefined
   const commitRates = rollingRate(points, 'commits')
   const rollbackRates = rollingRate(points, 'rollbacks')
-  const transactionRate = points.length > 1 ? (commitRates.at(-1) ?? 0) + (rollbackRates.at(-1) ?? 0) : undefined
+  const latestCommitRate = commitRates.at(-1)
+  const latestRollbackRate = rollbackRates.at(-1)
+  const transactionRate = points.length > 1 && Number.isFinite(latestCommitRate) && Number.isFinite(latestRollbackRate)
+    ? latestCommitRate! + latestRollbackRate!
+    : undefined
   const uptime = current?.postmasterStart ? duration((Date.now() - Date.parse(current.postmasterStart)) / 1000) : '—'
   return <section className="hgm-content" id="hgm-overview">
     <div className="hgm-cockpit-head">
@@ -292,7 +297,7 @@ function Overview({ t, sources, source, current, points, activities, lockWaits, 
       <Kpi code="CONN" label={t('sessions')} value={current?.sessionsTotal ?? '—'} suffix={current ? `/ ${current.maxConnections}` : undefined} detail={<span>{t('connectionUsage')} {utilization === undefined ? '—' : percent(utilization)}</span>} progress={utilization} tone="blue" />
       <Kpi code="ACTV" label={t('activeSessionList')} value={current?.sessionsActive ?? '—'} detail={<><span>{t('waitingSessions')} {current?.sessionsWaiting ?? '—'}</span><span>{t('idleTransaction')} {current?.sessionsIdleTransaction ?? '—'}</span></>} tone="cyan" />
       <Kpi code="LOCK" label={t('blockedSessions')} value={current?.blockedSessions ?? '—'} detail={<><span>{t('waitingSessions')} {current?.sessionsWaiting ?? '—'}</span><span>{t('locks')} {current?.locksNotGranted ?? '—'}</span></>} tone="amber" />
-      <Kpi code="TPS" label={t('transactions')} value={transactionRate === undefined ? '—' : compact(transactionRate)} suffix={transactionRate === undefined ? undefined : '/s'} detail={<><span>commit {commitRates.length > 1 ? perSecond(commitRates.at(-1) ?? 0) : '—'}</span><span>rollback {rollbackRates.length > 1 ? perSecond(rollbackRates.at(-1) ?? 0) : '—'}</span></>} tone="violet" />
+      <Kpi code="TPS" label={t('transactions')} value={transactionRate === undefined ? '—' : compact(transactionRate)} suffix={transactionRate === undefined ? undefined : '/s'} detail={<><span>commit {Number.isFinite(latestCommitRate) ? perSecond(latestCommitRate!) : '—'}</span><span>rollback {Number.isFinite(latestRollbackRate) ? perSecond(latestRollbackRate!) : '—'}</span></>} tone="violet" />
     </div>
     <OverviewDashboard t={t} source={source} current={current} points={points} />
     <div id="hgm-trends"><TrendArea t={t} source={source} current={current} points={points} onConfigure={onConfigure} /></div>
@@ -327,7 +332,7 @@ function OverviewDashboard({ t, source, current, points }: { t: T; source: Datas
           <div className="hgm-snapshot-facts">
             <SnapshotRow label={t('longQueries')} value={current?.longQueries ?? '—'} detail={`${t('longTransactions')} ${current?.longTransactions ?? '—'}`} tone="violet" />
             <SnapshotRow label={t('blockingTopology')} value={current?.blockedSessions ?? '—'} detail={`${t('locks')} ${current?.locksNotGranted ?? '—'}`} tone="amber" />
-            <SnapshotRow label={t('replicationDetails')} value={current?.replicationConnections ?? '—'} detail={(current?.replicationConnections ?? 0) > 0 ? `${t('replicationLag')} ${current!.maxReplayLagSeconds.toFixed(2)}s` : t('noDownstream')} tone="cyan" />
+            <SnapshotRow label={t('replicationDetails')} value={current?.replicationConnections ?? '—'} detail={(current?.replicationConnections ?? 0) > 0 ? `${t('replicationLag')} ${current!.maxReplayLagBytesAvailable ? bytes(current!.maxReplayLagBytes) : '—'}` : t('noDownstream')} tone="cyan" />
           </div>
         </div>
       </article>
@@ -350,8 +355,8 @@ function OverviewDashboard({ t, source, current, points }: { t: T; source: Datas
         <path className="hgm-wave-line" fill="none" stroke="url(#hgm-wave-stroke)" d="M0 75 C90 67 140 81 230 74 S380 62 470 73 S620 83 720 71 S880 62 970 73 S1110 83 1200 67" />
       </svg>
       <MiniMetric code="CACHE" label={t('cacheHit')} value={latestCacheHit === undefined || !Number.isFinite(latestCacheHit) ? '—' : percent(latestCacheHit)} detail="60s" tone="cyan" />
-      <MiniMetric code="WAL" label={t('walThroughput')} value={walRate === undefined ? '—' : bytesPerSecond(walRate)} detail={t('twoHours')} tone="blue" />
-      <MiniMetric code="REPL" label={t('replicationLag')} value={(current?.replicationConnections ?? 0) > 0 ? `${current!.maxReplayLagSeconds.toFixed(2)}s` : '—'} detail={(current?.replicationConnections ?? 0) > 0 ? bytes(current!.maxReplayLagBytes) : t('noDownstream')} tone="violet" />
+      <MiniMetric code="WAL" label={t('walThroughput')} value={walRate === undefined || !Number.isFinite(walRate) ? '—' : bytesPerSecond(walRate)} detail={t('twoHours')} tone="blue" />
+      <MiniMetric code="REPL" label={t('replicationLag')} value={(current?.replicationConnections ?? 0) > 0 && current?.maxReplayLagBytesAvailable ? bytes(current.maxReplayLagBytes) : '—'} detail={(current?.replicationConnections ?? 0) > 0 ? `${t('recentReplayLatency')} ${current!.maxReplayLagSecondsAvailable ? `${current!.maxReplayLagSeconds.toFixed(2)}s` : '—'}` : t('noDownstream')} tone="violet" />
     </div>
   </div>
 }
@@ -426,7 +431,7 @@ function TrendArea({ t, source, current, points, onConfigure }: { t: T; source: 
         { label: t('locks'), color: 'var(--hgm-amber)', values: points.map(point => point.locksNotGranted) },
         { label: t('deadlocks'), color: 'var(--hgm-violet)', values: deadlocksPerMinute },
       ]} />
-      {showReplication && <ChartCard title={t('replicationLag')} points={points} series={[{ label: 'seconds', color: 'var(--hgm-amber)', values: points.map(point => point.maxReplayLagSeconds) }]} />}</>}
+      {showReplication && <ChartCard title={t('recentReplayLatency')} points={points} series={[{ label: 'seconds', color: 'var(--hgm-amber)', values: points.map(point => point.maxReplayLagSecondsAvailable ? point.maxReplayLagSeconds : Number.NaN) }]} />}</>}
     </div>
   </div>
 }
@@ -444,10 +449,10 @@ function ActivityTable({ t, items, available, failed }: { t: T; items: Activity[
   return <section className="hgm-detail-panel hgm-activity-panel">
     <header><div><p className="hgm-eyebrow">{t('currentEvents')}</p><h3>{t('activeSessionList')}</h3></div><span>{failed || !available ? '—' : items.length}</span></header>
     {!available ? <div className="hgm-detail-empty">{t('capabilityUnavailable')}</div> : failed ? <div className="hgm-detail-empty">{t('detailLoadFailed')}</div> : items.length === 0 ? <div className="hgm-detail-empty">{t('noActiveSessions')}</div> : <div className="hgm-table-scroll"><table>
-      <thead><tr><th>{t('pid')}</th><th>{t('database')}</th><th>{t('user')}</th><th>{t('application')}</th><th>{t('state')}</th><th>{t('waitEvent')}</th><th>{t('duration')}</th><th>{t('querySummary')}</th></tr></thead>
+      <thead><tr><th>{t('pid')}</th><th>{t('database')}</th><th>{t('user')}</th><th>{t('application')}</th><th>{t('state')}</th><th>{t('waitEvent')}</th><th>{t('queryDuration')}</th><th>{t('querySummary')}</th></tr></thead>
       <tbody>{items.map(item => <tr key={item.pid}>
         <td><code>{item.pid}</code></td><td>{item.database ?? '—'}</td><td>{item.user ?? '—'}</td><td>{item.applicationName ?? '—'}</td><td>{item.state}</td><td>{item.waitEvent ?? item.waitEventType ?? '—'}</td>
-        <td>{duration(Math.max(item.queryAgeSeconds, item.transactionAgeSeconds))}</td><td title={item.sql}><code>{item.sql || '—'}</code></td>
+        <td>{duration(item.queryAgeSeconds)}</td><td title={item.sql}><code>{item.sql || '—'}</code></td>
       </tr>)}</tbody>
     </table></div>}
   </section>
@@ -458,9 +463,10 @@ function LockTopology({ t, items, available, failed }: { t: T; items: LockWait[]
     <header><div><p className="hgm-eyebrow">{t('currentEvents')}</p><h3>{t('blockingTopology')}</h3></div><span>{failed || !available ? '—' : items.length}</span></header>
     {!available ? <div className="hgm-detail-empty">{t('capabilityUnavailable')}</div> : failed ? <div className="hgm-detail-empty">{t('detailLoadFailed')}</div> : items.length === 0 ? <div className="hgm-detail-empty">{t('noLockWaits')}</div> : <div className="hgm-lock-list">{items.map((item, index) => {
       const object = [item.schemaName, item.relationName].filter(Boolean).join('.') || item.lockType || '—'
-      return <article key={`${item.blockingPid}-${item.blockedPid}-${index}`}>
-        <div className="hgm-lock-chain"><span><small>{t('blocker')}</small><b>PID {item.blockingPid}</b></span><i>→</i><span><small>{t('blocked')}</small><b>PID {item.blockedPid}</b></span></div>
-        <dl><div><dt>{t('duration')}</dt><dd>{duration(item.waitSeconds)}</dd></div><div><dt>{t('lockObject')}</dt><dd title={object}>{object}</dd></div><div><dt>{t('lockMode')}</dt><dd>{item.requestedMode ?? '—'}</dd></div></dl>
+      const blocker = item.blockerType === 'prepared_transaction' ? t('preparedTransaction') : `PID ${item.blockingPid}`
+      return <article key={`${item.blockerType}-${item.blockingPid}-${item.blockedPid}-${index}`}>
+        <div className="hgm-lock-chain"><span><small>{t('blocker')}</small><b>{blocker}</b></span><i>→</i><span><small>{t('blocked')}</small><b>PID {item.blockedPid}</b></span></div>
+        <dl><div><dt>{t('queryDuration')}</dt><dd>{duration(item.queryAgeSeconds)}</dd></div><div><dt>{t('lockObject')}</dt><dd title={object}>{object}</dd></div><div><dt>{t('lockMode')}</dt><dd>{item.requestedMode ?? '—'}</dd></div></dl>
       </article>
     })}</div>}
   </section>
@@ -486,11 +492,11 @@ function ReplicationPanel({ t, source, result }: { t: T; source: Datasource | un
     <header><div><p className="hgm-eyebrow">{t('currentFacts')}</p><h3>{t('replicationDetails')}</h3></div><span>{result === undefined ? '—' : t(result.role === 'standby' ? 'standby' : 'readWrite')}</span></header>
     {!available ? <div className="hgm-detail-empty">{t('replicationUnavailable')}</div> : result === undefined ? <div className="hgm-detail-empty">—</div> : <div className="hgm-replication-body">{result.role === 'standby' ? <div className="hgm-replica-summary">
       <Metric label="receive LSN" value={result.receiveLsn ?? '—'} /><Metric label="replay LSN" value={result.replayLsn ?? '—'} />
-      <Metric label={t('replicationLag')} value={`${result.replayLagSeconds.toFixed(2)}s · ${bytes(result.replayLagBytes)}`} />
+      <Metric label={t('replicationLag')} value={`${result.replayLagBytesAvailable ? bytes(result.replayLagBytes) : '—'} · ${t('lastReplayAge')} ${replayLatency(result.lastReplayAgeSeconds)}`} />
     </div> : <>
       {result.connections.length === 0 ? <div className="hgm-detail-empty">{t('noDownstream')}</div> : <div className="hgm-replica-list">{result.connections.map(item => <article key={item.pid}>
         <div><b>{item.applicationName || `PID ${item.pid}`}</b><span>{item.state} · {item.syncState}</span></div>
-        <code>{item.sentLsn ?? '—'} → {item.replayLsn ?? '—'}</code><strong>{item.replayLagSeconds.toFixed(2)}s · {bytes(item.replayLagBytes)}</strong>
+        <code>{item.sentLsn ?? '—'} → {item.replayLsn ?? '—'}</code><strong>{item.replayLagBytesAvailable ? bytes(item.replayLagBytes) : '—'} · {replayLatency(item.replayLagSeconds)}</strong>
       </article>)}</div>}
       {(result.slots?.length ?? 0) > 0 && <div className="hgm-slot-list">{result.slots!.map(slot => <span key={slot.name}><b>{slot.name}</b>{slot.slotType} · {slot.active ? t('active') : t('inactive')} · {bytes(slot.retainedBytes)}</span>)}</div>}
     </>}</div>}

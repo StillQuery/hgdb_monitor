@@ -396,6 +396,12 @@ func (r *Runtime) runSample(ctx context.Context, id string) error {
 			r.lastStatus[id] = status.ObservedAt
 			r.stateMu.Unlock()
 		}
+		if status, statusErr := r.repo.LatestInstanceStatus(ctx, id); statusErr == nil {
+			model.ApplyStatus(&snapshot, status)
+		} else if !errors.Is(statusErr, storage.ErrStatusNotFound) {
+			r.markStorage(false, "STORAGE_READ_FAILED")
+			return statusErr
+		}
 	}
 	err = r.repo.SaveSnapshot(ctx, id, snapshot)
 	if err != nil {

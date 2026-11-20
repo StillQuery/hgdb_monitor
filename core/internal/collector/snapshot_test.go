@@ -32,3 +32,18 @@ func TestBuiltinRegistryDeclaresTwentyFourMetrics(t *testing.T) {
 		t.Fatalf("expected 24 historical metrics, got %d", count)
 	}
 }
+
+func TestSnapshotUsesClientConnectionAndLagAvailabilitySemantics(t *testing.T) {
+	for _, required := range []string{
+		"backend_type = 'client backend'",
+		"pid <> pg_backend_pid()",
+		"pg_last_wal_receive_lsn()",
+		"activity.backend_type = 'client backend'",
+		"max_replay_lag_bytes_available",
+		"max_replay_lag_seconds_available",
+	} {
+		if !strings.Contains(snapshotSQL, required) {
+			t.Fatalf("snapshot query is missing %q", required)
+		}
+	}
+}

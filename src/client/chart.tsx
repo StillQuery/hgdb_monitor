@@ -70,19 +70,22 @@ export function compact(value: number): string {
 
 export function rollingRate(points: Snapshot[], key: keyof Snapshot, windowSeconds = 60): number[] {
   return points.map((point, index) => {
-    if (index === 0) return 0
+    if (index === 0) return Number.NaN
     const currentTime = Date.parse(point.collectedAt)
     let start = index
     while (start > 0 && currentTime - Date.parse(points[start - 1]!.collectedAt) <= windowSeconds * 1000) start -= 1
     if (start === index) start = index - 1
     let increase = 0
     for (let cursor = start + 1; cursor <= index; cursor += 1) {
-      const previous = Number(points[cursor - 1]![key])
-      const current = Number(points[cursor]![key])
-      increase += current >= previous ? current - previous : current
+      const previousPoint = points[cursor - 1]!
+      const currentPoint = points[cursor]!
+      const previous = Number(previousPoint[key])
+      const current = Number(currentPoint[key])
+      if (counterBoundaryChanged(previousPoint, currentPoint) || current < previous) return Number.NaN
+      increase += current - previous
     }
     const elapsed = (currentTime - Date.parse(points[start]!.collectedAt)) / 1000
-    return elapsed > 0 ? increase / elapsed : 0
+    return elapsed > 0 && elapsed <= windowSeconds ? increase / elapsed : Number.NaN
   })
 }
 
@@ -96,9 +99,16 @@ export function cacheHit(points: Snapshot[], windowSeconds = 60): number[] {
     let hit = 0; let read = 0
     for (let cursor = start + 1; cursor <= index; cursor += 1) {
       const previous = points[cursor - 1]!; const current = points[cursor]!
-      hit += current.blocksHit >= previous.blocksHit ? current.blocksHit - previous.blocksHit : current.blocksHit
-      read += current.blocksRead >= previous.blocksRead ? current.blocksRead - previous.blocksRead : current.blocksRead
+      if (counterBoundaryChanged(previous, current) || current.blocksHit < previous.blocksHit || current.blocksRead < previous.blocksRead) return Number.NaN
+      hit += current.blocksHit - previous.blocksHit
+      read += current.blocksRead - previous.blocksRead
     }
     return hit + read === 0 ? Number.NaN : hit * 100 / (hit + read)
   })
+}
+
+function counterBoundaryChanged(previous: Snapshot, current: Snapshot): boolean {
+  const left = Date.parse(previous.postmasterStart)
+  const right = Date.parse(current.postmasterStart)
+  return Number.isFinite(left) && Number.isFinite(right) && left > 0 && right > 0 && left !== right
 }

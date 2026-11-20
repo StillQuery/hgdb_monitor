@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 6
 
 var instanceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
@@ -95,7 +95,9 @@ func (s *SQLite) migrate(ctx context.Context) error {
 			checkpoints_requested INTEGER NOT NULL,
 			replication_connections INTEGER NOT NULL,
 			max_replay_lag_bytes INTEGER NOT NULL,
+			max_replay_lag_bytes_available INTEGER NOT NULL DEFAULT 0,
 			max_replay_lag_seconds REAL NOT NULL,
+			max_replay_lag_seconds_available INTEGER NOT NULL DEFAULT 0,
 			connected INTEGER NOT NULL,
 			postmaster_start_ms INTEGER NOT NULL,
 			in_recovery INTEGER NOT NULL,
@@ -144,14 +146,24 @@ func (s *SQLite) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE schema_meta SET version = 4 WHERE id = 1 AND version < 4`); err != nil {
+	if err := s.ensureTableColumn(ctx, "metric_snapshots", "max_replay_lag_seconds_available", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureTableColumn(ctx, "metric_snapshots", "max_replay_lag_bytes_available", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schema_meta SET version = 6 WHERE id = 1 AND version < 6`); err != nil {
 		return fmt.Errorf("update sqlite schema version: %w", err)
 	}
 	return nil
 }
 
 func (s *SQLite) ensureDatasourceColumn(ctx context.Context, name, definition string) error {
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(datasources)`)
+	return s.ensureTableColumn(ctx, "datasources", name, definition)
+}
+
+func (s *SQLite) ensureTableColumn(ctx context.Context, table, name, definition string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return fmt.Errorf("inspect datasource schema: %w", err)
 	}
@@ -176,8 +188,8 @@ func (s *SQLite) ensureDatasourceColumn(ctx context.Context, name, definition st
 	if found {
 		return nil
 	}
-	if _, err := s.db.ExecContext(ctx, `ALTER TABLE datasources ADD COLUMN `+name+` `+definition); err != nil {
-		return fmt.Errorf("add datasource column %s: %w", name, err)
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
+		return fmt.Errorf("add %s column %s: %w", table, name, err)
 	}
 	return nil
 }
@@ -405,7 +417,7 @@ const snapshotColumns = `
 	temp_files, temp_bytes, deadlocks,
 	locks_not_granted, blocked_sessions,
 	wal_bytes, checkpoints_timed, checkpoints_requested,
-	replication_connections, max_replay_lag_bytes, max_replay_lag_seconds,
+	replication_connections, max_replay_lag_bytes, max_replay_lag_bytes_available, max_replay_lag_seconds, max_replay_lag_seconds_available,
 	connected, postmaster_start_ms, in_recovery, max_connections, last_collected_at_ms`
 
 func (s *SQLite) LatestSnapshot(ctx context.Context, instanceID string) (model.Snapshot, error) {
@@ -462,7 +474,7 @@ func scanSnapshot(row rowScanner) (model.Snapshot, error) {
 		&snapshot.TempFiles, &snapshot.TempBytes, &snapshot.Deadlocks,
 		&snapshot.LocksNotGranted, &snapshot.BlockedSessions,
 		&snapshot.WALBytes, &snapshot.CheckpointsTimed, &snapshot.CheckpointsRequested,
-		&snapshot.ReplicationConnections, &snapshot.MaxReplayLagBytes, &snapshot.MaxReplayLagSeconds,
+		&snapshot.ReplicationConnections, &snapshot.MaxReplayLagBytes, &snapshot.MaxReplayLagBytesAvailable, &snapshot.MaxReplayLagSeconds, &snapshot.MaxReplayLagSecondsAvailable,
 		&snapshot.Connected, &postmasterStart, &snapshot.InRecovery, &snapshot.MaxConnections, &lastCollectedAt,
 	)
 	if err != nil {
@@ -510,10 +522,10 @@ func (s *SQLite) SaveSnapshot(ctx context.Context, instanceID string, snapshot m
 			temp_files, temp_bytes, deadlocks,
 			locks_not_granted, blocked_sessions,
 			wal_bytes, checkpoints_timed, checkpoints_requested,
-			replication_connections, max_replay_lag_bytes, max_replay_lag_seconds,
+			replication_connections, max_replay_lag_bytes, max_replay_lag_bytes_available, max_replay_lag_seconds, max_replay_lag_seconds_available,
 			connected, postmaster_start_ms, in_recovery, max_connections, last_collected_at_ms
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		)
 	`,
 		instanceID, snapshot.CollectedAt.UnixMilli(),
@@ -524,7 +536,7 @@ func (s *SQLite) SaveSnapshot(ctx context.Context, instanceID string, snapshot m
 		snapshot.TempFiles, snapshot.TempBytes, snapshot.Deadlocks,
 		snapshot.LocksNotGranted, snapshot.BlockedSessions,
 		snapshot.WALBytes, snapshot.CheckpointsTimed, snapshot.CheckpointsRequested,
-		snapshot.ReplicationConnections, snapshot.MaxReplayLagBytes, snapshot.MaxReplayLagSeconds,
+		snapshot.ReplicationConnections, snapshot.MaxReplayLagBytes, snapshot.MaxReplayLagBytesAvailable, snapshot.MaxReplayLagSeconds, snapshot.MaxReplayLagSecondsAvailable,
 		snapshot.Connected, snapshot.PostmasterStart.UnixMilli(), snapshot.InRecovery, snapshot.MaxConnections,
 		snapshot.LastCollectedAt.UnixMilli(),
 	)

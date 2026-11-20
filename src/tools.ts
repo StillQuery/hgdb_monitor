@@ -52,7 +52,7 @@ export function registerMonitorTools(ctx: Context, client: CoreClient): () => vo
     })),
     ctx.tools.register(defineTool({
       name: 'hgdb_monitor_query_metrics',
-      description: 'Use when the question names a specific metric or time range, e.g. “过去两小时 TPS 变化”, “缓存命中相关计数”, “会话数趋势”. Queries one to eight metric keys over a 5–120 minute window; a previous-window comparison limits each window to 60 minutes; each series returns at most 240 points.',
+      description: 'Use when the question names a specific metric or time range, e.g. “过去两小时 TPS 变化”, “缓存命中相关计数”, “会话数趋势”. Queries one to eight metric keys over a 5–120 minute window. Counter metrics include cumulative points, directly usable ratePoints, reset detection, and a bounded summary. A previous-window comparison limits each window to 60 minutes; each series returns at most 240 points.',
       parameters: {
         instance_ref: { type: 'string', required: true, description: 'Anonymous instance reference returned by hgdb_monitor_list_instances.' },
         metric_keys: { type: 'array', required: true, items: { type: 'string' }, description: 'One to eight keys from: sessions_total, sessions_active, sessions_idle_transaction, sessions_waiting, long_queries, long_transactions, commits, rollbacks, blocks_hit, blocks_read, rows_inserted, rows_updated, rows_deleted, temp_files, temp_bytes, deadlocks, locks_not_granted, blocked_sessions, wal_bytes, checkpoints_timed, checkpoints_requested, replication_connections, max_replay_lag_bytes, max_replay_lag_seconds.' },
@@ -75,7 +75,7 @@ export function registerMonitorTools(ctx: Context, client: CoreClient): () => vo
     })),
     ctx.tools.register(defineTool({
       name: 'hgdb_monitor_get_blocking_chains',
-      description: 'Use when the user asks who blocks whom, wants a blocking chain, or needs the lock object and the waiting SQL. Returns current blocker/blocked relationships with anonymous identities and redacted SQL.',
+      description: 'Use when the user asks who blocks whom, wants a blocking chain, or needs the lock object and the waiting SQL. Returns current blocker/blocked relationships, including prepared-transaction blockers, with anonymous identities and redacted SQL. queryAgeSeconds is the age of the blocked SQL, not an exact lock-wait duration.',
       parameters: { instance_ref: { type: 'string', required: true, description: 'Anonymous instance reference returned by hgdb_monitor_list_instances.' }, limit: { type: 'integer', description: 'Maximum rows; 1–20; defaults to 10.' } },
       output: jsonOutput, timeoutMs: 15_000, isConcurrencySafe: () => true,
       execute: async (args, exec) => safeCall(client, 'ai.lockWaits', { instanceRef: args.instance_ref, limit: args.limit ?? 10 }, 15_000, exec.signal),
@@ -89,7 +89,7 @@ export function registerMonitorTools(ctx: Context, client: CoreClient): () => vo
     })),
     ctx.tools.register(defineTool({
       name: 'hgdb_monitor_get_replication',
-      description: 'Use when the user asks whether this is a primary or standby, whether replication is lagging, how downstream connections look, or how much a slot retains. Returns factual role state and anonymous replication details; read-write does not imply that a standby exists.',
+      description: 'Use when the user asks whether this is a primary or standby, whether replication is lagging, how downstream connections look, or how much a slot retains. Returns factual role state and anonymous replication details; read-write does not imply that a standby exists. On a standby, lastReplayAgeSeconds means time since the most recently replayed transaction, not estimated catch-up time.',
       parameters: { instance_ref: { type: 'string', required: true, description: 'Anonymous instance reference returned by hgdb_monitor_list_instances.' }, include_slots: { type: 'boolean', description: 'Include replication slots; defaults to true.' } },
       output: jsonOutput, timeoutMs: 15_000, isConcurrencySafe: () => true,
       execute: async (args, exec) => safeCall(client, 'ai.replication', { instanceRef: args.instance_ref, includeSlots: args.include_slots ?? true }, 15_000, exec.signal),

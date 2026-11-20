@@ -73,7 +73,8 @@ func TopSQL(ctx context.Context, config datasource.TestConfig, order TopSQLOrder
 	if err != nil {
 		return TopSQLResult{}, datasource.SanitizeProbeError(err)
 	}
-	view := pgx.Identifier{schema, "pg_stat_statements"}.Sanitize()
+	view := extensionRelation(schema, "pg_stat_statements")
+	infoView := extensionRelation(schema, "pg_stat_statements_info")
 	query := fmt.Sprintf(`SELECT queryid::text, dbid::oid, userid::oid, coalesce(query,''), calls::bigint,
 		total_exec_time::double precision, mean_exec_time::double precision, rows::bigint,
 		shared_blks_hit::bigint, shared_blks_read::bigint, temp_blks_read::bigint, temp_blks_written::bigint,
@@ -99,9 +100,13 @@ func TopSQL(ctx context.Context, config datasource.TestConfig, order TopSQLOrder
 		return TopSQLResult{}, datasource.SanitizeProbeError(err)
 	}
 	var reset time.Time
-	if err := tx.QueryRow(queryCtx, `SELECT stats_reset FROM pg_catalog.pg_stat_statements_info`).Scan(&reset); err == nil {
+	if err := tx.QueryRow(queryCtx, fmt.Sprintf(`SELECT stats_reset FROM %s`, infoView)).Scan(&reset); err == nil {
 		value := reset.UTC()
 		result.StatsReset = &value
 	}
 	return result, nil
+}
+
+func extensionRelation(schema, name string) string {
+	return pgx.Identifier{schema, name}.Sanitize()
 }

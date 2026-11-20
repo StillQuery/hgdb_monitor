@@ -263,8 +263,35 @@ func TestCounterSummaryHandlesReset(t *testing.T) {
 		{CollectedAt: base.Add(20 * time.Second), Commits: 4},
 	}
 	result := summarizeMetric(definition, points)
-	if result.Increase != 24 || result.RatePerSecond != 1.2 {
+	if result.Increase != 20 || result.RatePerSecond != 2 || !result.ResetDetected || result.ObservedSeconds != 10 {
 		t.Fatalf("unexpected reset-aware summary: %#v", result)
+	}
+	rates := metricRatePoints(definition, points, 240)
+	if len(rates) != 1 || rates[0].Value != 2 {
+		t.Fatalf("reset interval must be omitted from rate points: %#v", rates)
+	}
+}
+
+func TestLatestMarksExpiredSnapshotDisconnected(t *testing.T) {
+	runtime, store, _ := newTestRuntime(t, time.Hour)
+	ctx := context.Background()
+	source, err := runtime.Create(ctx, validInput("stale", "secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	if err := store.SaveSnapshot(ctx, source.ID, model.Snapshot{CollectedAt: old, LastCollectedAt: old, Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveInstanceStatus(ctx, source.ID, model.InstanceStatus{ObservedAt: old, Connected: true}); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := runtime.Latest(ctx, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Connected {
+		t.Fatal("expired persisted sample must not be reported as connected")
 	}
 }
 

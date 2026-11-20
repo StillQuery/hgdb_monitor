@@ -54,7 +54,9 @@ export interface Snapshot {
   checkpointsRequested: number
   replicationConnections: number
   maxReplayLagBytes: number
+  maxReplayLagBytesAvailable: boolean
   maxReplayLagSeconds: number
+  maxReplayLagSecondsAvailable: boolean
   connected: boolean
   postmasterStart: string
   inRecovery: boolean
@@ -83,11 +85,12 @@ export interface Activity {
 export interface LockWait {
   blockedPid: number
   blockingPid: number
+  blockerType: 'session' | 'prepared_transaction'
   lockType?: string
   requestedMode?: string
   schemaName?: string
   relationName?: string
-  waitSeconds: number
+  queryAgeSeconds: number
   blockedSql: string
   blockingSql: string
 }
@@ -132,7 +135,8 @@ export interface ReplicationConnection {
   flushLsn?: string
   replayLsn?: string
   replayLagBytes: number
-  replayLagSeconds: number
+  replayLagBytesAvailable: boolean
+  replayLagSeconds?: number
 }
 export interface ReplicationSlot { name: string; slotType: string; plugin?: string; database?: string; active: boolean; retainedBytes: number }
 export interface ReplicationResult {
@@ -142,7 +146,8 @@ export interface ReplicationResult {
   receiveLsn?: string
   replayLsn?: string
   replayLagBytes: number
-  replayLagSeconds: number
+  replayLagBytesAvailable: boolean
+  lastReplayAgeSeconds?: number
 }
 
 export interface StorageStatus {
