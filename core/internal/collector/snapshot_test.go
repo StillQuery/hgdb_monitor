@@ -1,0 +1,34 @@
+package collector
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestSnapshotJSONContainsNoConnectionIdentity(t *testing.T) {
+	encoded, err := json.Marshal(Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"host", "address", "password", "username", "database"} {
+		if strings.Contains(strings.ToLower(text), forbidden) {
+			t.Fatalf("snapshot JSON contains forbidden connection identity %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestBuiltinRegistryDeclaresTwentyFourMetrics(t *testing.T) {
+	registry := NewRegistry()
+	if err := RegisterBuiltins(registry); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, definition := range registry.List() {
+		count += len(definition.Metrics)
+	}
+	if count != 24 {
+		t.Fatalf("expected 24 historical metrics, got %d", count)
+	}
+}

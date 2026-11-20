@@ -1,0 +1,15 @@
+node_modules/
+lib/
+coverage/
+core/bin/
+dist/
+*.tgz
+*.bak
+*.log
+*.db
+*.db-shm
+*.db-wal
+.smoke-dsh-home/
+dev/*.js
+dev/*.css
+dev/*.png

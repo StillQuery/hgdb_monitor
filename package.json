@@ -1,0 +1,88 @@
+{
+  "name": "hgdb_monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "面向 HGDB / PostgreSQL 14+ 的只读监控插件，当前支持监控：实时总览、会话与阻塞链、Top SQL、复制状态、只读 EXPLAIN、两小时趋势，并向 Harness 提供 8 个 AI 查询工具。",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib/*.js",
+    "lib/*.d.ts",
+    "core/bin",
+    "cordis.patch.yml",
+    "README.md",
+    "docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    },
+    "manifestVersion": 1
+  },
+  "scripts": {
+    "build": "npm run build:host && npm run build:core",
+    "build:host": "tsdown",
+    "build:core": "node scripts/build-core.mjs",
+    "build:preview": "tsdown --config tsdown.preview.config.ts",
+    "check": "tsc --noEmit",
+    "test": "npm run test:core",
+    "test:core": "go test ./...",
+    "verify": "npm run check && npm test && go vet ./... && npm run build",
+    "clean": "node scripts/clean.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-layout": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-sidebar": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-subprocess": ">=0.2.1-rc.5 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-rc.5 <0.3.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-client-locale": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-layout": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-renderer": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-host-webserver": "^0.2.2-rc.3",
+    "@deepseek-ai/dsh-subprocess": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "^0.2.2-rc.3",
+    "@types/node": "^22.15.0",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.15.0",
+    "typescript": "^5.9.0"
+  },
+  "license": "UNLICENSED"
+}
