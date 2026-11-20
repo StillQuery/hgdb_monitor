@@ -29,7 +29,7 @@ export const zh = {
   available: '可用', unavailable: '不可用', sampleCount: '历史样本', lastCleanup: '上次清理',
   instanceOverview: '实例概览', uptime: '已运行', connectionTrend: '连接与会话趋势', factsSummary: '当前快照',
   trendSessions: '连接与事务', trendIO: '缓存与读取', trendWrites: '写入与 WAL', trendStability: '锁与复制',
-  panelCrashed: '数据库监控页面加载失败', errorId: '错误编号：', checkLog: '请查看',
+  motionMode: '流光', panelCrashed: '数据库监控页面加载失败', errorId: '错误编号：', checkLog: '请查看',
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
@@ -63,7 +63,7 @@ export const en: Record<keyof typeof zh, string> = {
   available: 'Available', unavailable: 'Unavailable', sampleCount: 'History samples', lastCleanup: 'Last cleanup',
   instanceOverview: 'Instance overview', uptime: 'Uptime', connectionTrend: 'Connection and session trend', factsSummary: 'Current snapshot',
   trendSessions: 'Connections & transactions', trendIO: 'Cache & reads', trendWrites: 'Writes & WAL', trendStability: 'Locks & replication',
-  panelCrashed: 'Database monitor failed to load', errorId: 'Error ID:', checkLog: 'Check',
+  motionMode: 'Glow', panelCrashed: 'Database monitor failed to load', errorId: 'Error ID:', checkLog: 'Check',
 }
 
 export type TextKey = keyof typeof zh

@@ -1,4 +1,4 @@
-import { useId, useState, type MouseEvent } from 'react'
+import { useId, useState, type CSSProperties, type MouseEvent } from 'react'
 import type { Snapshot } from './types.js'
 
 interface Series { label: string; color: string; values: number[] }
@@ -45,7 +45,12 @@ export function TrendChart({ points, series, format = compact }: { points: Snaps
           <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={firstSeries?.color ?? 'var(--hgm-blue)'} stopOpacity=".2" /><stop offset="1" stopColor={firstSeries?.color ?? 'var(--hgm-blue)'} stopOpacity="0" /></linearGradient></defs>
           <path className="hgm-chart-grid" d="M0 14H100M0 53H100M0 92H100" />
           {areaPath !== undefined && <path className="hgm-chart-area" d={areaPath} fill={`url(#${gradientId})`} />}
-          {series.map(item => <path key={item.label} d={path(item.values)} fill="none" stroke={item.color} strokeWidth="1.8" vectorEffect="non-scaling-stroke" />)}
+          {series.map((item, index) => <path className="hgm-chart-line" key={item.label} d={path(item.values)} fill="none" stroke={item.color} strokeWidth="1.8" vectorEffect="non-scaling-stroke" style={{ '--hgm-series-delay': `${index * 90}ms` } as CSSProperties} />)}
+          {series.map(item => {
+            const value = item.values.at(-1)
+            if (value === undefined || !Number.isFinite(value)) return null
+            return <path className="hgm-chart-live-dot" key={`${item.label}-live`} d={`M99.3,${yAt(value)}h.001`} fill="none" stroke={item.color} strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" style={{ color: item.color } as CSSProperties} />
+          })}
           {hoverX !== undefined && <><path className="hgm-chart-cursor" d={`M${hoverX},10V94`} />{series.map(item => { const value = item.values[hovered!]; return value === undefined || !Number.isFinite(value) ? null : <circle key={item.label} cx={hoverX} cy={yAt(value)} r="2.5" fill={item.color} vectorEffect="non-scaling-stroke" /> })}</>}
         </svg>
         {hovered !== undefined && <div className="hgm-chart-tooltip" style={{ left: `${Math.min(88, Math.max(12, hoverX ?? 50))}%` }}>

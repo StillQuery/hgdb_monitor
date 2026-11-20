@@ -6,12 +6,34 @@ import type { T } from './locales.js'
 import type { Activity, Datasource, DatasourceInput, LockWait, ReplicationResult, Snapshot, StorageStatus, TopSQLResult } from './types.js'
 
 type Page = 'overview' | 'sources'
+const motionPreferenceKey = 'hgdb_monitor.motion_mode'
 const blank: DatasourceInput = { displayName: '', host: '', port: 5432, database: 'postgres', user: 'postgres', password: '', sslMode: 'prefer', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10 }
 const sslModes = ['disable', 'allow', 'prefer', 'require'] as const
+
+function initialFlowMode(): boolean {
+  try { return window.localStorage.getItem(motionPreferenceKey) === 'flow' }
+  catch { return false }
+}
 
 function DatabaseIcon({ size = 20 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
     <ellipse cx="12" cy="5" rx="7" ry="3" /><path d="M5 5v7c0 1.7 3.1 3 7 3s7-1.3 7-3V5" /><path d="M5 12v7c0 1.7 3.1 3 7 3s7-1.3 7-3v-7" />
+  </svg>
+}
+
+function CockpitDatabaseIcon() {
+  return <svg className="hgm-database-glyph" viewBox="0 0 36 36" fill="none" aria-hidden>
+    <defs>
+      <linearGradient id="hgm-database-stroke" x1="8" y1="7" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+        <stop stopColor="var(--hgm-blue)" />
+        <stop offset="1" stopColor="var(--hgm-cyan)" />
+      </linearGradient>
+    </defs>
+    <path className="hgm-glyph-frame" d="M6 12V7h5M25 29h5v-5" />
+    <ellipse className="hgm-glyph-database" cx="18" cy="10" rx="8.5" ry="3.5" stroke="url(#hgm-database-stroke)" />
+    <path className="hgm-glyph-database" d="M9.5 10v7c0 2 3.8 3.6 8.5 3.6s8.5-1.6 8.5-3.6v-7M9.5 17v8c0 2 3.8 3.6 8.5 3.6s8.5-1.6 8.5-3.6v-8" stroke="url(#hgm-database-stroke)" />
+    <path className="hgm-glyph-pulse" d="M11.5 23h3l1.7-3.2 3.2 5.8 2.1-4h3" />
+    <circle className="hgm-glyph-node" cx="26.4" cy="21.6" r="1.15" />
   </svg>
 }
 
@@ -47,6 +69,7 @@ function duration(seconds: number): string {
 
 export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorApi?: MonitorApi; onAnalyze?: (instanceRef: string) => Promise<void> }) {
   const [page, setPage] = useState<Page>('overview')
+  const [flowMode, setFlowMode] = useState(initialFlowMode)
   const [sources, setSources] = useState<Datasource[]>([])
   const [selected, setSelected] = useState('')
   const [current, setCurrent] = useState<Snapshot>()
@@ -67,6 +90,11 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   const currentGeneration = useRef(0)
   const historyGeneration = useRef(0)
   const detailGeneration = useRef(0)
+
+  useEffect(() => {
+    try { window.localStorage.setItem(motionPreferenceKey, flowMode ? 'flow' : 'static') }
+    catch { /* Local storage can be unavailable in restricted webviews. */ }
+  }, [flowMode])
 
   const reloadSources = useCallback(async () => {
     const [list, storage] = await Promise.all([monitorApi.list(), monitorApi.storage().catch(() => undefined)])
@@ -208,7 +236,7 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
     catch (error) { reportClientError('start_analysis', error, 'App'); notify('error', t('operationFailed')) }
   }
 
-  return <main className="hgm-page">
+  return <main className="hgm-page" data-motion={flowMode ? 'flow' : 'static'}>
     <div className="hgm-main-scroll">
       <header className="hgm-toolbar">
         <div className="hgm-toolbar-inner">
@@ -219,14 +247,15 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
             </div>
             {page === 'overview' && sources.length > 0 && <div className="hgm-toolbar-divider" aria-hidden />}
             <div className="hgm-instance-picker">
-              {page === 'overview' && sources.length > 0 ? <select aria-label={t('selectInstance')} value={selected} onChange={event => setSelected(event.target.value)}>
+              {page === 'overview' && sources.length > 0 ? <div className="hgm-select-shell"><select aria-label={t('selectInstance')} value={selected} onChange={event => setSelected(event.target.value)}>
                 {sources.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}
-              </select> : null}
+              </select><i aria-hidden /></div> : null}
               {page === 'overview' && selectedSource && <span data-live={selectedSource.persistentEnabled}><i />{selectedSource.persistentEnabled ? t('collecting') : t('paused')}</span>}
             </div>
           </div>
           <div className="hgm-topbar-meta">
             {page === 'overview' && <span>{t('lastSample')} <b>{liveLoading ? '…' : elapsed(pageUpdatedAt)}</b>{!liveLoading && pageUpdatedAt !== undefined ? <> {t('ago')}</> : null}</span>}
+            <button className="hgm-motion-toggle" aria-pressed={flowMode} onClick={() => setFlowMode(value => !value)} title={t('motionMode')}><i aria-hidden /><span>{t('motionMode')}</span></button>
             <button className="hgm-icon-btn" onClick={refresh} title={t('refresh')} aria-label={t('refresh')}><svg viewBox="0 0 24 24" aria-hidden><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.5 6.5L4 11m16 2-2.5 4.5A7 7 0 0 1 5.8 15" /></svg></button>
           </div>
         </div>
@@ -251,7 +280,7 @@ function Overview({ t, sources, source, current, points, activities, lockWaits, 
   return <section className="hgm-content" id="hgm-overview">
     <div className="hgm-cockpit-head">
       <div className="hgm-instance-title">
-        <span className="hgm-database-mark"><DatabaseIcon size={24} /></span>
+        <span className="hgm-database-mark"><CockpitDatabaseIcon /></span>
         <div><p className="hgm-eyebrow">{t('instanceOverview')}</p><h2>{source?.displayName ?? t('instance')}</h2><div className="hgm-instance-meta"><span>{current ? (current.inRecovery ? t('standby') : t('readWrite')) : '—'}</span><i /> <span>{t('uptime')} {uptime}</span></div></div>
       </div>
       <div className="hgm-heading-actions">
@@ -335,14 +364,14 @@ function CapacityGauge({ value, label }: { value: number | undefined; label: str
 }
 
 function SnapshotRow({ label, value, detail, tone }: { label: string; value: string | number; detail: string; tone: string }) {
-  return <div className="hgm-snapshot-row" data-tone={tone}><i /><div><b>{label}</b><span>{detail}</span></div><strong>{value}</strong></div>
+  return <div className="hgm-snapshot-row" data-tone={tone}><i /><div><b>{label}</b><span>{detail}</span></div><strong className="hgm-value-refresh" key={value}>{value}</strong></div>
 }
 
 function MiniMetric({ code, label, value, detail, tone }: { code: string; label: string; value: string; detail: string; tone: string }) {
   return <article className="hgm-mini-metric" data-tone={tone}>
     <div className="hgm-mini-signal"><i /><code>{code}</code></div>
     <div className="hgm-mini-copy"><span>{label}</span><small>{detail}</small></div>
-    <strong>{value}</strong>
+    <strong className="hgm-value-refresh" key={value}>{value}</strong>
   </article>
 }
 
@@ -476,7 +505,7 @@ function Empty({ t, onConfigure }: { t: T; onConfigure(): void }) {
 
 function Kpi({ code, label, value, suffix, detail, tone, progress }: { code: string; label: string; value: string | number; suffix?: string | undefined; detail: ReactNode; tone: string; progress?: number | undefined }) {
   const width = progress === undefined || !Number.isFinite(progress) ? undefined : Math.min(100, Math.max(0, progress))
-  return <article className="hgm-kpi" data-tone={tone}><div className="hgm-kpi-top"><span>{label}</span><code>{code}</code></div><strong>{value}{suffix && <small>{suffix}</small>}</strong><p className="hgm-kpi-details">{detail}</p>{width !== undefined && <div className="hgm-kpi-meter"><i style={{ width: `${width}%` }} /></div>}<i className="hgm-kpi-glow" /></article>
+  return <article className="hgm-kpi" data-tone={tone}><div className="hgm-kpi-top"><span>{label}</span><code>{code}</code></div><strong className="hgm-value-refresh" key={value}>{value}{suffix && <small>{suffix}</small>}</strong><p className="hgm-kpi-details">{detail}</p>{width !== undefined && <div className="hgm-kpi-meter"><i style={{ width: `${width}%` }} /></div>}<i className="hgm-kpi-glow" /></article>
 }
 
 function ChartCard({ title, points, series, format }: Parameters<typeof TrendChart>[0] & { title: string }) {
