@@ -108,17 +108,21 @@ func collectCheckpointStats(ctx context.Context, tx pgx.Tx, snapshot *Snapshot) 
 	return tx.QueryRow(ctx, query).Scan(&snapshot.CheckpointsTimed, &snapshot.CheckpointsRequested)
 }
 
+// snapshotSQL 汇总一个采样点的全部指标。
+// 会话类指标不再排除采集自身的连接（原先用 pid <> pg_backend_pid() 过滤）：
+// 监控连接确实占用了一个连接槽位，按实际占用统计才能让使用率反映真实容量，
+// 否则每台实例的使用率都会恒定少算一个连接。
 const snapshotSQL = `
 WITH activity AS (
   SELECT
     count(*)::bigint AS sessions_total,
-    count(*) FILTER (WHERE state = 'active' AND pid <> pg_backend_pid())::bigint AS sessions_active,
+    count(*) FILTER (WHERE state = 'active')::bigint AS sessions_active,
     count(*) FILTER (WHERE state LIKE 'idle in transaction%')::bigint AS sessions_idle_transaction,
     count(*) FILTER (
-      WHERE state = 'active' AND pid <> pg_backend_pid() AND wait_event IS NOT NULL
+      WHERE state = 'active' AND wait_event IS NOT NULL
     )::bigint AS sessions_waiting,
     count(*) FILTER (
-      WHERE state = 'active' AND pid <> pg_backend_pid()
+      WHERE state = 'active'
         AND query_start <= clock_timestamp() - interval '60 seconds'
     )::bigint AS long_queries,
     count(*) FILTER (
@@ -127,7 +131,6 @@ WITH activity AS (
     )::bigint AS long_transactions
   FROM pg_catalog.pg_stat_activity
   WHERE backend_type = 'client backend'
-    AND pid <> pg_backend_pid()
 ), database_stats AS (
   SELECT
     coalesce(sum(xact_commit), 0)::bigint AS commits,

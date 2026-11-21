@@ -10,6 +10,10 @@ const raw = {
     : undefined,
 }
 
+// 前端 bundle 的注册 id 必须与包名一致：宿主按 package.json 的 name 去查找
+// 浏览器端模块，写死旧名会导致服务端插件正常启动、但页面端代码不挂载（菜单消失）。
+const packageName = (JSON.parse(readFileSync(resolve(import.meta.dirname, 'package.json'), 'utf8')) as { name: string }).name
+
 export default defineConfig([
   {
     entry: ['src/index.ts'], format: ['esm'], dts: true, sourcemap: false, clean: true,
@@ -21,7 +25,7 @@ export default defineConfig([
     deps: { neverBundle: ['react', 'react/jsx-runtime', 'react-dom'] },
     outputOptions: {
       entryFileNames: 'client.js',
-      banner: 'window.__ModuleLoader__.load({ id: "hgdb_monitor", factory: (require) => {',
+      banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(packageName)}, factory: (require) => {`,
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',
     },

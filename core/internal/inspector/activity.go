@@ -137,6 +137,8 @@ func buildActivityQuery(kind ActivityKind, minimumSeconds int) (string, error) {
 	return activityQueryPrefix + predicate + activityQuerySuffix, nil
 }
 
+// activityQueryPrefix 列出会话明细。
+// 与快照统计保持同一口径：不过滤采集自身的连接，否则"会话总数"会比列表行数多一个。
 const activityQueryPrefix = `
 		SELECT pid, coalesce(datname, ''), coalesce(usename, ''), coalesce(application_name, ''), coalesce(client_addr::text, ''),
 		       coalesce(state, ''), coalesce(wait_event_type, ''), coalesce(wait_event, ''),
@@ -144,7 +146,7 @@ const activityQueryPrefix = `
 		       CASE WHEN xact_start IS NULL THEN 0 ELSE extract(epoch FROM clock_timestamp() - xact_start) END,
 		       coalesce(query, ''), backend_start, xact_start, query_start
 		FROM pg_catalog.pg_stat_activity
-		WHERE backend_type = 'client backend' AND pid <> pg_backend_pid() AND `
+		WHERE backend_type = 'client backend' AND `
 
 const activityQuerySuffix = `
 		ORDER BY CASE WHEN $3::text = 'long_transaction' THEN xact_start WHEN $3::text = 'idle_in_transaction' THEN state_change ELSE query_start END ASC NULLS LAST

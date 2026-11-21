@@ -36,7 +36,7 @@ func TestBuiltinRegistryDeclaresTwentyFourMetrics(t *testing.T) {
 func TestSnapshotUsesClientConnectionAndLagAvailabilitySemantics(t *testing.T) {
 	for _, required := range []string{
 		"backend_type = 'client backend'",
-		"pid <> pg_backend_pid()",
+		// 会话统计已改为包含采集自身连接（占用即计入），因此不再要求出现 pid <> pg_backend_pid()。
 		"pg_last_wal_receive_lsn()",
 		"activity.backend_type = 'client backend'",
 		"max_replay_lag_bytes_available",

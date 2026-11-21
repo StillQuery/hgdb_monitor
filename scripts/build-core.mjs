@@ -13,8 +13,10 @@ const targets = [
 
 for (const target of targets) {
   await new Promise((resolve, reject) => {
+    // -buildvcs=false：产物不应依赖本机的 git 状态。发布包、CI 或 .git 异常时
+    // go build 取 VCS 信息会失败并中断整个打包流程，这里显式关闭版本信息注入。
     const child = spawn('go', [
-      'build', '-trimpath', '-ldflags=-s -w',
+      'build', '-trimpath', '-buildvcs=false', '-ldflags=-s -w',
       '-o', `${output}/${target.file}`,
       './core/cmd/hgdb-monitor-core',
     ], {
