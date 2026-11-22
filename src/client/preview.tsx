@@ -1,12 +1,13 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './app.js'
-import { zh } from './locales.js'
+import { en, zh } from './locales.js'
 import type { MonitorApi } from './api.js'
 import type { Datasource, Snapshot } from './types.js'
 import './preview-theme.css'
 import './style.css'
 
-const forcedTheme = new URLSearchParams(window.location.search).get('theme')
+const params = new URLSearchParams(window.location.search)
+const forcedTheme = params.get('theme')
 if (forcedTheme === 'light' || forcedTheme === 'dark') document.documentElement.dataset.previewTheme = forcedTheme
 
 const now = Date.now()
@@ -16,6 +17,8 @@ const sources: Datasource[] = [
   { id: 'two', instanceRef: 'db_preview_two', displayName: '报表分析库', host: '192.0.2.22', port: 5432, database: 'reporting', user: 'monitor', sslMode: 'require', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10, capabilities, persistentEnabled: true, verifiedAt: new Date(now - 43_200_000).toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
   { id: 'three', instanceRef: 'db_preview_three', displayName: '归档库', host: '192.0.2.23', port: 5432, database: 'archive', user: 'monitor', sslMode: 'prefer', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10, capabilities: { ...capabilities, pgStatStatements: false }, persistentEnabled: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ]
+if (params.has('empty')) sources.length = 0
+let nextId = 0
 
 function point(index: number): Snapshot {
   const wave = Math.sin(index / 8)
@@ -34,8 +37,32 @@ function point(index: number): Snapshot {
 
 const points = Array.from({ length: 120 }, (_, index) => point(index))
 const api: MonitorApi = {
-  list: async () => sources,
-  create: async () => sources[0]!, update: async () => sources[0]!, remove: async () => ({ deleted: true }), test: async () => ({}),
+  list: async () => [...sources],
+  create: async ({ password: _password, ...input }) => {
+    if (sources.length >= 5) throw new Error('Data source limit reached')
+    if (params.has('failCreate') && nextId === 0) { nextId += 1; throw new Error('Preview save rejected') }
+    const id = `preview-${++nextId}`
+    const timestamp = new Date().toISOString()
+    const source = { ...input, id, instanceRef: `db_${id}`, capabilities, persistentEnabled: false, createdAt: timestamp, updatedAt: timestamp }
+    sources.push(source)
+    return source
+  },
+  update: async (id, { password: _password, ...input }) => {
+    const index = sources.findIndex(source => source.id === id)
+    const source = sources[index]
+    if (!source) throw new Error('Unknown data source')
+    const updated = { ...source, ...input, updatedAt: new Date().toISOString() }
+    sources[index] = updated
+    return updated
+  },
+  remove: async () => ({ deleted: true }),
+  test: async id => {
+    const index = sources.findIndex(source => source.id === id)
+    const source = sources[index]
+    if (!source) throw new Error('Unknown data source')
+    sources[index] = { ...source, verifiedAt: new Date().toISOString() }
+    return {}
+  },
   persistent: async () => sources[0]!, current: async id => ({ ...points.at(-1)!, inRecovery: id === 'two' }),
   activities: async () => Array.from({ length: 14 }, (_, index) => ({ pid: 18422 + index, database: 'orders', user: `app_user_${index + 1}`, applicationName: 'order-api', state: 'active', waitEventType: index % 2 === 0 ? 'Lock' : 'Client', waitEvent: index % 2 === 0 ? 'transactionid' : 'ClientRead', queryAgeSeconds: 18 + index * 4, transactionAgeSeconds: 80 + index * 9, sql: 'UPDATE orders SET status = $1 WHERE id = $2' })),
   lockWaits: async () => Array.from({ length: 12 }, (_, index) => ({ blockedPid: 18519 + index, blockingPid: 18422, blockerType: 'session' as const, lockType: 'relation', requestedMode: 'RowExclusiveLock', schemaName: 'public', relationName: `orders_${index + 1}`, queryAgeSeconds: 43 + index, blockedSql: 'UPDATE orders SET status = $1', blockingSql: 'UPDATE orders SET status = $1' })),
@@ -45,5 +72,6 @@ const api: MonitorApi = {
   replication: async () => ({ role: 'read-write', replayLagBytes: 0, replayLagBytesAvailable: true, lastReplayAgeSeconds: 0, connections: Array.from({ length: 10 }, (_, index) => ({ pid: 2210 + index, applicationName: `standby-${index + 1}`, state: 'streaming', syncState: 'async', sentLsn: '0/8A001000', writeLsn: '0/8A000F00', flushLsn: '0/8A000F00', replayLsn: '0/8A000E00', replayLagBytes: 512 + index, replayLagBytesAvailable: true, replayLagSeconds: 0.2 + index / 10 })), slots: Array.from({ length: 8 }, (_, index) => ({ name: `standby_slot_${index + 1}`, slotType: 'physical', active: true, retainedBytes: 1024 + index })) }),
   storage: async () => ({ engine: 'sqlite', schemaVersion: 6, databaseReady: true, snapshotCount: 3250, runtime: { ready: true, lastCleanupAt: new Date(now - 3_600_000).toISOString(), lastCleanupDeleted: 120 } }),
 }
-const t = (key: keyof typeof zh) => zh[key]
+const dictionary = params.get('lang') === 'en' ? en : zh
+const t = (key: keyof typeof zh) => dictionary[key]
 createRoot(document.getElementById('root')!).render(<App t={t} monitorApi={api} onAnalyze={async () => { window.alert('已创建匿名分析会话') }} />)

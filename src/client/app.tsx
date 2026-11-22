@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { api as defaultApi, type MonitorApi } from './api.js'
 import { cacheHit, compact, rollingRate, TrendChart } from './chart.js'
 import { reportClientError } from './diagnostics.js'
+import { InstanceGear } from './instance-gear.js'
 import type { T } from './locales.js'
 import type { Activity, Datasource, DatasourceInput, LockWait, ReplicationResult, Snapshot, StorageStatus, TopSQLResult } from './types.js'
 
 type Page = 'overview' | 'sources'
+const maxSources = 5
 const motionPreferenceKey = 'hgdb_monitor.motion_mode'
 const blank: DatasourceInput = { displayName: '', host: '', port: 5432, database: 'postgres', user: 'postgres', password: '', sslMode: 'prefer', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10 }
 const sslModes = ['disable', 'allow', 'prefer', 'require'] as const
@@ -18,22 +20,6 @@ function initialFlowMode(): boolean {
 function DatabaseIcon({ size = 20 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
     <ellipse cx="12" cy="5" rx="7" ry="3" /><path d="M5 5v7c0 1.7 3.1 3 7 3s7-1.3 7-3V5" /><path d="M5 12v7c0 1.7 3.1 3 7 3s7-1.3 7-3v-7" />
-  </svg>
-}
-
-function CockpitDatabaseIcon() {
-  return <svg className="hgm-database-glyph" viewBox="0 0 36 36" fill="none" aria-hidden>
-    <defs>
-      <linearGradient id="hgm-database-stroke" x1="8" y1="7" x2="29" y2="29" gradientUnits="userSpaceOnUse">
-        <stop stopColor="var(--hgm-blue)" />
-        <stop offset="1" stopColor="var(--hgm-cyan)" />
-      </linearGradient>
-    </defs>
-    <path className="hgm-glyph-frame" d="M6 12V7h5M25 29h5v-5" />
-    <ellipse className="hgm-glyph-database" cx="18" cy="10" rx="8.5" ry="3.5" stroke="url(#hgm-database-stroke)" />
-    <path className="hgm-glyph-database" d="M9.5 10v7c0 2 3.8 3.6 8.5 3.6s8.5-1.6 8.5-3.6v-7M9.5 17v8c0 2 3.8 3.6 8.5 3.6s8.5-1.6 8.5-3.6v-8" stroke="url(#hgm-database-stroke)" />
-    <path className="hgm-glyph-pulse" d="M11.5 23h3l1.7-3.2 3.2 5.8 2.1-4h3" />
-    <circle className="hgm-glyph-node" cx="26.4" cy="21.6" r="1.15" />
   </svg>
 }
 
@@ -73,6 +59,11 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   const [flowMode, setFlowMode] = useState(initialFlowMode)
   const [sources, setSources] = useState<Datasource[]>([])
   const [selected, setSelected] = useState('')
+  const [displayedId, setDisplayedId] = useState('')
+  const [atAddSlot, setAtAddSlot] = useState(false)
+  const [sourceEditor, setSourceEditor] = useState<Datasource | 'new'>()
+  const editorOpen = sourceEditor !== undefined
+  const [testingId, setTestingId] = useState('')
   const [current, setCurrent] = useState<Snapshot>()
   const [points, setPoints] = useState<Snapshot[]>([])
   const [activities, setActivities] = useState<Activity[]>([])
@@ -91,6 +82,7 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   const currentGeneration = useRef(0)
   const historyGeneration = useRef(0)
   const detailGeneration = useRef(0)
+  const sourcesGeneration = useRef(0)
 
   useEffect(() => {
     try { window.localStorage.setItem(motionPreferenceKey, flowMode ? 'flow' : 'static') }
@@ -98,7 +90,9 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   }, [flowMode])
 
   const reloadSources = useCallback(async () => {
+    const generation = ++sourcesGeneration.current
     const [list, storage] = await Promise.all([monitorApi.list(), monitorApi.storage().catch(() => undefined)])
+    if (generation !== sourcesGeneration.current) return
     setSources(list)
     setStorageStatus(storage)
     setSelected(value => list.some(source => source.id === value) ? value : list[0]?.id ?? '')
@@ -113,19 +107,19 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   }, [reloadSources, t])
 
   useEffect(() => {
+    if (editorOpen) return
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') setDisplayClock(Date.now())
     }, 1_000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [editorOpen])
 
   const selectedSource = sources.find(source => source.id === selected)
 
   useEffect(() => {
-    const currentToken = ++currentGeneration.current
-    const historyToken = ++historyGeneration.current
-    const detailToken = ++detailGeneration.current
     setCurrent(undefined)
+    setDisplayedId(selectedSource?.id ?? '')
+    setLiveLoading(false)
     setPageUpdatedAt(undefined)
     setPoints([])
     setActivities([])
@@ -134,7 +128,14 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
     setLockWaitError(false)
     setTopSQL(undefined)
     setReplication(undefined)
-    if (selectedSource === undefined || selectedSource.verifiedAt === undefined) return
+  }, [refreshNonce, selectedSource])
+
+  useEffect(() => {
+    if (editorOpen) { setLiveLoading(false); return }
+    if (!selectedSource?.verifiedAt) return
+    const currentToken = ++currentGeneration.current
+    const historyToken = ++historyGeneration.current
+    const detailToken = ++detailGeneration.current
 
     const loadCurrent = async () => {
       if (document.visibilityState !== 'visible') return
@@ -225,7 +226,7 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
       historyGeneration.current += 1
       detailGeneration.current += 1
     }
-  }, [monitorApi, refreshNonce, selectedSource])
+  }, [editorOpen, monitorApi, refreshNonce, selectedSource])
 
   const notify = (tone: 'ok' | 'error', text: string) => { setMessage({ tone, text }); window.setTimeout(() => setMessage(undefined), 3200) }
   const refresh = () => {
@@ -237,25 +238,44 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
     catch (error) { reportClientError('start_analysis', error, 'App'); notify('error', t('operationFailed')) }
   }
 
+  const configure = () => { setAtAddSlot(false); setPage('sources') }
+  const hasAddSlot = !loading && sources.length < maxSources
+  const addSlot = hasAddSlot ? sources.length : -1
+  const selectedIndex = sources.findIndex(source => source.id === selected)
+  const showingAdd = hasAddSlot && (atAddSlot || selectedIndex < 0)
+  const hasCurrentSource = displayedId === selected
+  const station = showingAdd ? t('addSourceSlot') : selectedIndex < 0 ? t('instanceOverview') : t('gearPrompt')
+  const selectSlot = (slot: number) => {
+    setAtAddSlot(slot === addSlot)
+    const source = sources[slot]
+    if (source) setSelected(source.id)
+  }
+  const testSource = async (id: string) => {
+    setTestingId(id)
+    try { await monitorApi.test(id); await reloadSources(); notify('ok', t('tested')) }
+    catch (error) { reportClientError('datasource_test', error, 'App'); notify('error', failureText(t, 'failedTest', error)) }
+    finally { setTestingId('') }
+  }
+  const metaAction = showingAdd
+    ? <button type="button" className="hgm-instance-action" onClick={() => setSourceEditor('new')}>＋ {t('addSource')}</button>
+    : selectedSource && !selectedSource.verifiedAt
+      ? <button type="button" className="hgm-instance-action" disabled={testingId !== ''} onClick={() => void testSource(selectedSource.id)}>{testingId === selectedSource.id ? t('testing') : t('test')}</button>
+      : undefined
+  const gear = <InstanceGear count={sources.length + Number(hasAddSlot)} slot={showingAdd ? addSlot : Math.max(0, selectedIndex)}
+    label={`${t('selectInstance')} · ${showingAdd ? station : selectedSource?.displayName ?? station}. ${t('gearHint')}`} hint={t('gearHint')}
+    onSelect={selectSlot} />
+
   return <main className="hgm-page" data-motion={flowMode ? 'flow' : 'static'}>
     <div className="hgm-main-scroll">
       <header className="hgm-toolbar">
         <div className="hgm-toolbar-inner">
           <div className="hgm-toolbar-left">
-            <div className="hgm-page-tabs" role="tablist" aria-label={t('panel')}>
-              <button role="tab" aria-selected={page === 'overview'} onClick={() => setPage('overview')}>{t('overview')}</button>
-              <button role="tab" aria-selected={page === 'sources'} onClick={() => setPage('sources')}>{t('sources')} <small>{sources.length}/5</small></button>
-            </div>
-            {page === 'overview' && sources.length > 0 && <div className="hgm-toolbar-divider" aria-hidden />}
-            <div className="hgm-instance-picker">
-              {page === 'overview' && sources.length > 0 ? <div className="hgm-select-shell"><select aria-label={t('selectInstance')} value={selected} onChange={event => setSelected(event.target.value)}>
-                {sources.map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}
-              </select><i aria-hidden /></div> : null}
-              {page === 'overview' && selectedSource && <span data-live={selectedSource.persistentEnabled}><i />{selectedSource.persistentEnabled ? t('collecting') : t('paused')}</span>}
-            </div>
+            {page === 'overview'
+              ? <span className="hgm-toolbar-title">{t('overview')}</span>
+              : <button className="hgm-toolbar-link" onClick={() => setPage('overview')}>← {t('overview')}</button>}
           </div>
           <div className="hgm-topbar-meta">
-            {page === 'overview' && <span>{t('lastSample')} <b>{liveLoading ? '…' : elapsed(pageUpdatedAt)}</b>{!liveLoading && pageUpdatedAt !== undefined ? <> {t('ago')}</> : null}</span>}
+            {page === 'overview' && <><span>{t('lastSample')} <b>{hasCurrentSource && liveLoading ? '…' : elapsed(hasCurrentSource ? pageUpdatedAt : undefined)}</b>{hasCurrentSource && !liveLoading && pageUpdatedAt !== undefined ? <> {t('ago')}</> : null}</span><button className="hgm-toolbar-link" onClick={configure}>{t('manageSources')}</button></>}
             <button className="hgm-motion-toggle" aria-pressed={flowMode} onClick={() => setFlowMode(value => !value)} title={t('motionMode')}><i aria-hidden /><span>{t('motionMode')}</span></button>
             <button className="hgm-icon-btn" onClick={refresh} title={t('refresh')} aria-label={t('refresh')}><svg viewBox="0 0 24 24" aria-hidden><path d="M20 6v5h-5M4 18v-5h5" /><path d="M18.2 9A7 7 0 0 0 6.5 6.5L4 11m16 2-2.5 4.5A7 7 0 0 1 5.8 15" /></svg></button>
           </div>
@@ -263,16 +283,27 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
       </header>
       {message && <div className="hgm-toast" data-tone={message.tone}>{message.text}</div>}
       {page === 'overview'
-        ? <Overview t={t} sources={sources} source={selectedSource} current={current} points={points} activities={activities} lockWaits={lockWaits} activityError={activityError} lockWaitError={lockWaitError} topSQL={topSQL} replication={replication} loading={loading} onConfigure={() => setPage('sources')} {...(analyze === undefined ? {} : { onAnalyze: analyze })} />
-        : <Sources t={t} sources={sources} storageStatus={storageStatus} monitorApi={monitorApi} reload={reloadSources} notify={notify} />}
+        ? <Overview t={t} source={selectedSource} current={hasCurrentSource ? current : undefined} points={hasCurrentSource ? points : []} activities={hasCurrentSource ? activities : []} lockWaits={hasCurrentSource ? lockWaits : []} activityError={hasCurrentSource && activityError} lockWaitError={hasCurrentSource && lockWaitError} topSQL={hasCurrentSource ? topSQL : undefined} replication={hasCurrentSource ? replication : undefined} empty={!loading && sources.length === 0} station={station} metaAction={metaAction} gear={gear} onConfigure={configure} {...(analyze === undefined ? {} : { onAnalyze: analyze })} />
+        : <Sources t={t} sources={sources} storageStatus={storageStatus} monitorApi={monitorApi} reload={reloadSources} notify={notify} onEdit={setSourceEditor} />}
     </div>
+    {sourceEditor && <SourceDialog t={t} source={sourceEditor === 'new' ? undefined : sourceEditor} close={() => setSourceEditor(undefined)} save={async input => {
+      const isNew = sourceEditor === 'new'
+      const source = isNew ? await monitorApi.create({ ...input, password: input.password ?? '' }) : await monitorApi.update(sourceEditor.id, input)
+      sourcesGeneration.current += 1
+      setSources(list => list.some(item => item.id === source.id) ? list.map(item => item.id === source.id ? source : item) : [...list, source])
+      if (isNew && (page === 'overview' || selectedSource === undefined)) {
+        setSelected(source.id)
+        setAtAddSlot(false)
+      }
+      setSourceEditor(undefined)
+      notify('ok', t('saved'))
+    }} />}
   </main>
 }
 
-function Overview({ t, sources, source, current, points, activities, lockWaits, activityError, lockWaitError, topSQL, replication, loading, onConfigure, onAnalyze }: {
-  t: T; sources: Datasource[]; source: Datasource | undefined; current: Snapshot | undefined; points: Snapshot[]; activities: Activity[]; lockWaits: LockWait[]; activityError: boolean; lockWaitError: boolean; topSQL: TopSQLResult | undefined; replication: ReplicationResult | undefined; loading: boolean; onConfigure(): void; onAnalyze?: (instanceRef: string) => Promise<void>
+function Overview({ t, source, current, points, activities, lockWaits, activityError, lockWaitError, topSQL, replication, empty, station, metaAction, gear, onConfigure, onAnalyze }: {
+  t: T; source: Datasource | undefined; current: Snapshot | undefined; points: Snapshot[]; activities: Activity[]; lockWaits: LockWait[]; activityError: boolean; lockWaitError: boolean; topSQL: TopSQLResult | undefined; replication: ReplicationResult | undefined; empty: boolean; station: string; metaAction: ReactNode; gear: ReactNode; onConfigure(): void; onAnalyze?: (instanceRef: string) => Promise<void>
 }) {
-  if (!loading && sources.length === 0) return <Empty t={t} onConfigure={onConfigure} />
   const utilization = current && current.maxConnections > 0 ? current.sessionsTotal * 100 / current.maxConnections : undefined
   const commitRates = rollingRate(points, 'commits')
   const rollbackRates = rollingRate(points, 'rollbacks')
@@ -285,14 +316,15 @@ function Overview({ t, sources, source, current, points, activities, lockWaits, 
   return <section className="hgm-content" id="hgm-overview">
     <div className="hgm-cockpit-head">
       <div className="hgm-instance-title">
-        <span className="hgm-database-mark"><CockpitDatabaseIcon /></span>
-        <div><p className="hgm-eyebrow">{t('instanceOverview')}</p><h2>{source?.displayName ?? t('instance')}</h2><div className="hgm-instance-meta"><span>{current ? (current.inRecovery ? t('standby') : t('readWrite')) : '—'}</span><i /> <span>{t('uptime')} {uptime}</span></div></div>
+        {gear}
+        <div className="hgm-instance-caption" aria-live="polite"><p className="hgm-eyebrow hgm-instance-station">{station}</p><h2 title={source?.displayName}>{source?.displayName ?? t(empty ? 'noSources' : 'instance')}</h2><div className="hgm-instance-meta">{metaAction ?? <><span>{current ? (current.inRecovery ? t('standby') : t('readWrite')) : '—'}</span><i /> <span>{t('uptime')} {uptime}</span></>}</div></div>
       </div>
-      <div className="hgm-heading-actions">
+      {!empty && <div className="hgm-heading-actions">
         <div className="hgm-head-signals"><span data-on={current?.connected}><i />{current?.connected ? t('connected') : source?.verifiedAt ? t('realtimeUnavailable') : t('unverified')}</span><span data-on={source?.persistentEnabled}><i />{source?.persistentEnabled ? t('collecting') : t('paused')}</span></div>
         {source && onAnalyze && <button className="hgm-ai-button" onClick={() => void onAnalyze(source.instanceRef)}><span>✦</span>{t('analyzeWithAI')}</button>}
-      </div>
+      </div>}
     </div>
+    {empty ? <p className="hgm-overview-empty">{t('noSourcesHint')}</p> : <>
     <div className="hgm-kpis">
       <Kpi code="CONN" label={t('sessions')} value={current?.sessionsTotal ?? '—'} suffix={current ? `/ ${current.maxConnections}` : undefined} detail={<span>{t('connectionUsage')} {utilization === undefined ? '—' : percent(utilization)}</span>} progress={utilization} tone="blue" />
       <Kpi code="ACTV" label={t('activeSessionList')} value={current?.sessionsActive ?? '—'} detail={<><span>{t('waitingSessions')} {current?.sessionsWaiting ?? '—'}</span><span>{t('idleTransaction')} {current?.sessionsIdleTransaction ?? '—'}</span></>} tone="cyan" />
@@ -309,6 +341,7 @@ function Overview({ t, sources, source, current, points, activities, lockWaits, 
       <div id="hgm-top-sql"><TopSQLPanel t={t} source={source} result={topSQL} /></div>
       <ReplicationPanel t={t} source={source} result={replication} />
     </div>
+    </>}
   </section>
 }
 
@@ -505,10 +538,6 @@ function ReplicationPanel({ t, source, result }: { t: T; source: Datasource | un
 
 function Metric({ label, value }: { label: string; value: string }) { return <div className="hgm-metric"><span>{label}</span><strong>{value}</strong></div> }
 
-function Empty({ t, onConfigure }: { t: T; onConfigure(): void }) {
-  return <section className="hgm-empty"><span><DatabaseIcon size={30} /></span><h2>{t('noSources')}</h2><p>{t('noSourcesHint')}</p><button className="hgm-primary" onClick={onConfigure}>{t('addSource')}</button></section>
-}
-
 function Kpi({ code, label, value, suffix, detail, tone, progress }: { code: string; label: string; value: string | number; suffix?: string | undefined; detail: ReactNode; tone: string; progress?: number | undefined }) {
   const width = progress === undefined || !Number.isFinite(progress) ? undefined : Math.min(100, Math.max(0, progress))
   return <article className="hgm-kpi" data-tone={tone}><div className="hgm-kpi-top"><span>{label}</span><code>{code}</code></div><strong className="hgm-value-refresh" key={value}>{value}{suffix && <small>{suffix}</small>}</strong><p className="hgm-kpi-details">{detail}</p>{width !== undefined && <div className="hgm-kpi-meter"><i style={{ width: `${width}%` }} /></div>}<i className="hgm-kpi-glow" /></article>
@@ -518,8 +547,7 @@ function ChartCard({ title, points, series, format }: Parameters<typeof TrendCha
   return <article className="hgm-panel"><header><h3>{title}</h3><span>15 s</span></header><TrendChart points={points} series={series} {...(format === undefined ? {} : { format })} /></article>
 }
 
-function Sources({ t, sources, storageStatus, monitorApi, reload, notify }: { t: T; sources: Datasource[]; storageStatus: StorageStatus | undefined; monitorApi: MonitorApi; reload(): Promise<void>; notify(tone: 'ok' | 'error', text: string): void }) {
-  const [editing, setEditing] = useState<Datasource | 'new'>()
+function Sources({ t, sources, storageStatus, monitorApi, reload, notify, onEdit }: { t: T; sources: Datasource[]; storageStatus: StorageStatus | undefined; monitorApi: MonitorApi; reload(): Promise<void>; notify(tone: 'ok' | 'error', text: string): void; onEdit(source: Datasource | 'new'): void }) {
   const [busy, setBusy] = useState('')
   const act = async (key: string, work: () => Promise<unknown>, success?: string, failure: FailureKey = 'failedSave') => {
     setBusy(key)
@@ -528,8 +556,8 @@ function Sources({ t, sources, storageStatus, monitorApi, reload, notify }: { t:
     finally { setBusy('') }
   }
   return <section className="hgm-content">
-    <div className="hgm-source-head"><div><p className="hgm-eyebrow">{t('sourceLimit')}</p><h2>{t('sources')}</h2></div><button className="hgm-primary" disabled={sources.length >= 5} onClick={() => setEditing('new')}>＋ {t('addSource')}</button></div>
-    <StorageCard t={t} status={storageStatus} />
+    <div className="hgm-source-head"><div><p className="hgm-eyebrow">{t('sourceLimit')}</p><h2>{t('sources')}</h2></div><button className="hgm-primary" disabled={sources.length >= maxSources} onClick={() => onEdit('new')}>＋ {t('addSource')}</button></div>
+    {sources.length > 0 && <><StorageCard t={t} status={storageStatus} />
     <div className="hgm-source-list">
       {sources.map(source => <article className="hgm-source-card" key={source.id}>
         <div className="hgm-source-icon"><DatabaseIcon /></div>
@@ -537,18 +565,11 @@ function Sources({ t, sources, storageStatus, monitorApi, reload, notify }: { t:
         <label className="hgm-toggle-row"><span><b>{t('persistent')}</b><small>{t('persistentHint')}</small></span><button className="hgm-switch" role="switch" aria-checked={source.persistentEnabled} disabled={!source.verifiedAt || busy !== ''} onClick={() => void act(`persistent-${source.id}`, () => monitorApi.persistent(source.id, !source.persistentEnabled), undefined, 'failedToggle')}><i /></button></label>
         <div className="hgm-source-actions">
           <button disabled={busy !== ''} onClick={() => void act(`test-${source.id}`, () => monitorApi.test(source.id), t('tested'), 'failedTest')}>{busy === `test-${source.id}` ? t('testing') : t('test')}</button>
-          <button onClick={() => setEditing(source)}>{t('edit')}</button>
+          <button disabled={busy !== ''} onClick={() => onEdit(source)}>{t('edit')}</button>
           <button className="hgm-danger" disabled={busy !== ''} onClick={() => { if (window.confirm(t('confirmDelete'))) void act(`delete-${source.id}`, () => monitorApi.remove(source.id), undefined, 'failedDelete') }}>{t('delete')}</button>
         </div>
       </article>)}
-      {sources.length === 0 && <Empty t={t} onConfigure={() => setEditing('new')} />}
-    </div>
-    {editing && <SourceDialog t={t} source={editing === 'new' ? undefined : editing} close={() => setEditing(undefined)} save={async input => {
-      await act('save', () => editing === 'new'
-        ? monitorApi.create({ ...input, password: input.password ?? '' })
-        : monitorApi.update(editing.id, input), t('saved'))
-      setEditing(undefined)
-    }} />}
+    </div></>}
   </section>
 }
 
@@ -570,10 +591,26 @@ function SourceDialog({ t, source, close, save }: { t: T; source: Datasource | u
   const initial = useMemo<DatasourceInput>(() => source ? { displayName: source.displayName, host: source.host, port: source.port, database: source.database, user: source.user, password: '', sslMode: (sslModes as readonly string[]).includes(source.sslMode) ? source.sslMode : 'require', connectTimeoutSeconds: source.connectTimeoutSeconds, queryTimeoutSeconds: source.queryTimeoutSeconds } : blank, [source])
   const [form, setForm] = useState(initial)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const dialog = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
+  useEffect(() => {
+    const element = dialog.current
+    element?.showModal()
+    return () => element?.close()
+  }, [])
   const field = (key: keyof DatasourceInput, value: string | number) => setForm(current => ({ ...current, [key]: value }))
-  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); try { await save(form) } finally { setSaving(false) } }
-  return <div className="hgm-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><form className="hgm-dialog" onSubmit={event => void submit(event)}>
-    <header><div><p className="hgm-eyebrow">{source ? t('edit') : t('addSource')}</p><h2>{t('sources')}</h2></div><button type="button" onClick={close}>×</button></header>
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (saving) return
+    setSaving(true)
+    setError('')
+    try { await save(form) }
+    catch (failure) { reportClientError('datasource_save', failure, 'SourceDialog'); setError(failureText(t, 'failedSave', failure)) }
+    finally { setSaving(false) }
+  }
+  return <dialog ref={dialog} className="hgm-dialog" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!saving && form === initial) close() }}><form onSubmit={event => void submit(event)}>
+    <header><h2 id={titleId}>{source ? t('editSource') : t('addSource')}</h2><button type="button" aria-label={t('cancel')} disabled={saving} onClick={close}>×</button></header>
     <div className="hgm-form-grid">
       <Field label={t('name')}><input required maxLength={64} value={form.displayName} onChange={event => field('displayName', event.target.value)} /></Field>
       <Field label={t('host')}><input required value={form.host} onChange={event => field('host', event.target.value)} /></Field>
@@ -585,8 +622,9 @@ function SourceDialog({ t, source, close, save }: { t: T; source: Datasource | u
       <Field label={t('connectTimeout')}><input required type="number" min={1} max={30} value={form.connectTimeoutSeconds} onChange={event => field('connectTimeoutSeconds', Number(event.target.value))} /></Field>
       <Field label={t('queryTimeout')}><input required type="number" min={1} max={30} value={form.queryTimeoutSeconds} onChange={event => field('queryTimeoutSeconds', Number(event.target.value))} /></Field>
     </div>
-    <footer><button type="button" onClick={close}>{t('cancel')}</button><button className="hgm-primary" disabled={saving}>{t('save')}</button></footer>
-  </form></div>
+    {error && <p className="hgm-form-error" role="alert">{error}</p>}
+    <footer><button type="button" disabled={saving} onClick={close}>{t('cancel')}</button><button className="hgm-primary" disabled={saving}>{t('save')}</button></footer>
+  </form></dialog>
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="hgm-field"><span>{label}</span>{children}</label> }

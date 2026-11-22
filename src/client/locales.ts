@@ -1,5 +1,6 @@
 export const zh = {
-  panel: '数据库监控', overview: '监控总览', sources: '数据源', addSource: '添加数据源', noSources: '尚未配置数据源',
+  panel: '瀚高数据库监控', overview: '监控总览', sources: '数据源', addSource: '添加数据源', noSources: '尚未配置数据源',
+  manageSources: '管理数据源', addSourceSlot: '新增档位', editSource: '编辑数据源', gearPrompt: '上下拨动', gearHint: '上下拨动、点击齿轮上半或下半，或按上下方向键切换',
   noSourcesHint: '添加并测试数据库连接后，即可查看实时状态并按需开启持续采集。', instance: '实例', readWrite: '可读写', standby: '备库',
   collecting: '持续采集', paused: '未持续采集', verified: '连接已验证', unverified: '等待连接测试', lastSample: '页面更新于', ago: '前',
   sessions: '连接使用', totalSessions: '总会话', activeSessions: '活跃', waitingSessions: '等待', blockedSessions: '阻塞', idleTransaction: '空闲事务',
@@ -10,7 +11,7 @@ export const zh = {
   sslMode: 'SSL 模式', sourceLimit: '最多配置 5 个实例', confirmDelete: '确定删除该数据源及其历史监控数据吗？',
   saved: '已保存', tested: '连接测试成功', operationFailed: '操作失败', failedSave: '保存失败：', failedTest: '测试连接失败：',
   failedDelete: '删除失败：', failedToggle: '切换采集失败：', failedLoad: '读取数据源失败：', currentFacts: '实时状态', role: '角色',
-  maxConnections: '最大连接数', collectionDisabled: '开启持续采集后查看最近 2 小时趋势', selectInstance: '选择实例',
+  maxConnections: '最大连接数', collectionDisabled: '开启持续采集后查看最近 2 小时趋势', selectInstance: '切换实例',
   connected: '连接正常', realtimeUnavailable: '暂无实时数据', waitAndBlock: '等待与阻塞', longActivity: '长时间活动',
   longQueries: '长查询', longTransactions: '长事务', replicationConnections: '下游连接', noDownstream: '无下游复制连接',
   historyTrends: '持久化趋势', sessionLoad: '会话负载', transactionLoad: '事务负载', cacheAndIo: '缓存与读取',
@@ -33,7 +34,8 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
-  panel: 'Database monitor', overview: 'Overview', sources: 'Data sources', addSource: 'Add data source', noSources: 'No data source configured',
+  panel: 'HG monitor', overview: 'Overview', sources: 'Data sources', addSource: 'Add data source', noSources: 'No data source configured',
+  manageSources: 'Manage sources', addSourceSlot: 'Add source slot', editSource: 'Edit data source', gearPrompt: 'Drag up or down', gearHint: 'Drag up or down, click the top or bottom half, or use the up and down arrow keys to switch',
   noSourcesHint: 'Add and test a connection to view live status and optionally enable continuous collection.', instance: 'Instance', readWrite: 'Read-write', standby: 'Standby',
   collecting: 'Collecting', paused: 'Collection off', verified: 'Connection verified', unverified: 'Connection test required', lastSample: 'Page updated', ago: 'ago',
   sessions: 'Connection usage', totalSessions: 'Total sessions', activeSessions: 'Active', waitingSessions: 'Waiting', blockedSessions: 'Blocked', idleTransaction: 'Idle in transaction',
@@ -44,7 +46,7 @@ export const en: Record<keyof typeof zh, string> = {
   sslMode: 'SSL mode', sourceLimit: 'Up to 5 instances', confirmDelete: 'Delete this data source and its monitoring history?',
   saved: 'Saved', tested: 'Connection test succeeded', operationFailed: 'Operation failed', failedSave: 'Save failed: ', failedTest: 'Connection test failed: ',
   failedDelete: 'Delete failed: ', failedToggle: 'Collection toggle failed: ', failedLoad: 'Failed to load data sources: ', currentFacts: 'Live state', role: 'Role',
-  maxConnections: 'Max connections', collectionDisabled: 'Enable continuous collection to view two-hour trends', selectInstance: 'Select instance',
+  maxConnections: 'Max connections', collectionDisabled: 'Enable continuous collection to view two-hour trends', selectInstance: 'Switch instance',
   connected: 'Connected', realtimeUnavailable: 'No live data', waitAndBlock: 'Waits and blocking', longActivity: 'Long-running activity',
   longQueries: 'Long queries', longTransactions: 'Long transactions', replicationConnections: 'Downstreams', noDownstream: 'No downstream replication',
   historyTrends: 'Persistent trends', sessionLoad: 'Session load', transactionLoad: 'Transaction load', cacheAndIo: 'Cache and reads',
