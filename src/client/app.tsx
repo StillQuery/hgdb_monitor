@@ -484,7 +484,7 @@ function ActivityTable({ t, items, available, failed }: { t: T; items: Activity[
     {!available ? <div className="hgm-detail-empty">{t('capabilityUnavailable')}</div> : failed ? <div className="hgm-detail-empty">{t('detailLoadFailed')}</div> : items.length === 0 ? <div className="hgm-detail-empty">{t('noActiveSessions')}</div> : <div className="hgm-table-scroll"><table>
       <thead><tr><th>{t('pid')}</th><th>{t('database')}</th><th>{t('user')}</th><th>{t('application')}</th><th>{t('state')}</th><th>{t('waitEvent')}</th><th>{t('queryDuration')}</th><th>{t('querySummary')}</th></tr></thead>
       <tbody>{items.map(item => <tr key={item.pid}>
-        <td><code>{item.pid}</code></td><td>{item.database ?? '—'}</td><td>{item.user ?? '—'}</td><td>{item.applicationName ?? '—'}</td><td>{item.state}</td><td>{item.waitEvent ?? item.waitEventType ?? '—'}</td>
+        <td><code>{item.pid}</code></td><td>{item.database ?? '—'}</td><td>{item.user ?? '—'}</td><td title={item.applicationName}>{item.applicationName ?? '—'}</td><td>{item.state}</td><td>{item.waitEvent ?? item.waitEventType ?? '—'}</td>
         <td>{duration(item.queryAgeSeconds)}</td><td title={item.sql}><code>{item.sql || '—'}</code></td>
       </tr>)}</tbody>
     </table></div>}
