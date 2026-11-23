@@ -118,7 +118,7 @@ npm.cmd run verify
 npm.cmd pack
 ```
 
-生成的 `hgdb-monitor-<版本号>.tgz` 包含 Harness 宿主代码、浏览器端代码以及 Windows/Linux x64 核心程序，可交给 Harness 的本地插件安装流程使用。`lib/`、`core/bin/` 和 tgz 都是构建产物，不提交到 Git。
+生成的 `hgdb-monitor-<版本号>.tgz` 包含 Harness 宿主代码、浏览器端代码以及 Windows/Linux x64 核心程序，可交给 Harness 的本地插件安装流程使用。
 
 ### 数据库集成测试
 
@@ -132,5 +132,3 @@ $env:HGDB_TEST_USER = 'monitor'
 $env:HGDB_TEST_PASSWORD = '<test-password>'
 npm.cmd test
 ```
-
-不要将真实账号、密码或连接地址写入源码、README、测试文件或提交记录。
