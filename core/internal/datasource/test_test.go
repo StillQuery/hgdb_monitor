@@ -13,6 +13,18 @@ func TestConnectionConfigValidatesRequiredFields(t *testing.T) {
 	}
 }
 
+func TestValidateConfigDefaultsSSLModeToDisable(t *testing.T) {
+	sslMode, err := ValidateConfig(TestConfig{
+		Host: "127.0.0.1", Port: 5432, Database: "db", User: "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sslMode != "disable" {
+		t.Fatalf("expected disable, got %s", sslMode)
+	}
+}
+
 func TestConnectionConfigEscapesCredentials(t *testing.T) {
 	config, _, _, err := connectionConfig(TestConfig{
 		Host: "127.0.0.1", Port: 5432, Database: "db/name", User: "user@name",

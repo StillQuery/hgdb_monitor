@@ -195,7 +195,7 @@ func ValidateConfig(input TestConfig) (string, error) {
 	}
 	sslMode := input.SSLMode
 	if sslMode == "" {
-		sslMode = "prefer"
+		sslMode = "disable"
 	}
 	if _, ok := allowedSSLModes[sslMode]; !ok {
 		return "", &PublicError{Code: "INVALID_DATASOURCE", Message: "unsupported SSL mode"}

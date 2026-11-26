@@ -9,7 +9,7 @@ import type { Activity, Datasource, DatasourceInput, LockWait, ReplicationResult
 type Page = 'overview' | 'sources'
 const maxSources = 5
 const motionPreferenceKey = 'hgdb_monitor.motion_mode'
-const blank: DatasourceInput = { displayName: '', host: '', port: 5432, database: 'postgres', user: 'postgres', password: '', sslMode: 'prefer', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10 }
+const blank: DatasourceInput = { displayName: '', host: '', port: 5432, database: 'postgres', user: 'postgres', password: '', sslMode: 'disable', connectTimeoutSeconds: 5, queryTimeoutSeconds: 10 }
 const sslModes = ['disable', 'allow', 'prefer', 'require'] as const
 
 function initialFlowMode(): boolean {
@@ -60,7 +60,6 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
   const [sources, setSources] = useState<Datasource[]>([])
   const [selected, setSelected] = useState('')
   const [displayedId, setDisplayedId] = useState('')
-  const [atAddSlot, setAtAddSlot] = useState(false)
   const [sourceEditor, setSourceEditor] = useState<Datasource | 'new'>()
   const editorOpen = sourceEditor !== undefined
   const [testingId, setTestingId] = useState('')
@@ -238,15 +237,11 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
     catch (error) { reportClientError('start_analysis', error, 'App'); notify('error', t('operationFailed')) }
   }
 
-  const configure = () => { setAtAddSlot(false); setPage('sources') }
-  const hasAddSlot = !loading && sources.length < maxSources
-  const addSlot = hasAddSlot ? sources.length : -1
+  const configure = () => setPage('sources')
   const selectedIndex = sources.findIndex(source => source.id === selected)
-  const showingAdd = hasAddSlot && (atAddSlot || selectedIndex < 0)
   const hasCurrentSource = displayedId === selected
-  const station = showingAdd ? t('addSourceSlot') : selectedIndex < 0 ? t('instanceOverview') : t('gearPrompt')
+  const station = selectedIndex < 0 ? t('instanceOverview') : t('gearPrompt')
   const selectSlot = (slot: number) => {
-    setAtAddSlot(slot === addSlot)
     const source = sources[slot]
     if (source) setSelected(source.id)
   }
@@ -256,13 +251,11 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
     catch (error) { reportClientError('datasource_test', error, 'App'); notify('error', failureText(t, 'failedTest', error)) }
     finally { setTestingId('') }
   }
-  const metaAction = showingAdd
-    ? <button type="button" className="hgm-instance-action" onClick={() => setSourceEditor('new')}>＋ {t('addSource')}</button>
-    : selectedSource && !selectedSource.verifiedAt
-      ? <button type="button" className="hgm-instance-action" disabled={testingId !== ''} onClick={() => void testSource(selectedSource.id)}>{testingId === selectedSource.id ? t('testing') : t('test')}</button>
-      : undefined
-  const gear = <InstanceGear count={sources.length + Number(hasAddSlot)} slot={showingAdd ? addSlot : Math.max(0, selectedIndex)}
-    label={`${t('selectInstance')} · ${showingAdd ? station : selectedSource?.displayName ?? station}. ${t('gearHint')}`} hint={t('gearHint')}
+  const metaAction = selectedSource && !selectedSource.verifiedAt
+    ? <button type="button" className="hgm-instance-action" disabled={testingId !== ''} onClick={() => void testSource(selectedSource.id)}>{testingId === selectedSource.id ? t('testing') : t('test')}</button>
+    : undefined
+  const gear = <InstanceGear count={sources.length} slot={Math.max(0, selectedIndex)}
+    label={`${t('selectInstance')} · ${selectedSource?.displayName ?? station}. ${t('gearHint')}`} hint={t('gearHint')}
     onSelect={selectSlot} />
 
   return <main className="hgm-page" data-motion={flowMode ? 'flow' : 'static'}>
@@ -293,7 +286,6 @@ export function App({ t, monitorApi = defaultApi, onAnalyze }: { t: T; monitorAp
       setSources(list => list.some(item => item.id === source.id) ? list.map(item => item.id === source.id ? source : item) : [...list, source])
       if (isNew && (page === 'overview' || selectedSource === undefined)) {
         setSelected(source.id)
-        setAtAddSlot(false)
       }
       setSourceEditor(undefined)
       notify('ok', t('saved'))
